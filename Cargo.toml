@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "wichain-backend/src-tauri",
+    "wichain-blockchain",
+    "wichain-core",
+    "wichain-network",
+    "wichain-types"
+]
+resolver = "2"
