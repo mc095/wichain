@@ -1,6 +1,6 @@
 // frontend/src/components/ChatView.tsx
 import React, { useMemo, useRef, useEffect } from 'react';
-import type { Blockchain, Block, SignedMessage } from '../lib/api'; // Make sure Block is also imported if it's defined in api.ts
+import type { Blockchain, SignedMessage, Block } from '../lib/api'; // Ensure Block is imported
 
 interface Props {
   blockchain: Blockchain;
@@ -17,121 +17,148 @@ interface ChatItem {
   mine: boolean;
 }
 
-/* Try to interpret our inline peer tag format: @peer:<id>:::<text> */
+/* Inline peer tag format: @peer:<id>:::<text> */
 function parseTaggedText(s: string): { to?: string; text: string } {
   const tag = '@peer:';
   if (s.startsWith(tag)) {
     const rest = s.slice(tag.length);
     const sep = rest.indexOf(':::');
     if (sep >= 0) {
-      const id = rest.slice(0, sep);
-      const txt = rest.slice(sep + 3);
-      return { to: id, text: txt };
+      return {
+        to: rest.slice(0, sep),
+        text: rest.slice(sep + 3),
+      };
     }
   }
   return { text: s };
 }
 
-// Define the expected structures for your payloads
-// You might already have these defined in '../lib/api' or elsewhere.
-// If not, you'd define them here or in a types file.
-
-
-interface TextPayload {
-  Text: string;
+// Define specific types for the JSON payloads if not already in api.ts
+// This helps eliminate 'any' and provides better type safety.
+// Adjust these if you have more precise types defined elsewhere.
+interface TextMessagePayload {
+    Text: string;
 }
 
-interface MessagesPayload {
-  Messages: SignedMessage[];
+interface MessagesContainerPayload {
+    Messages: SignedMessage[];
 }
 
-// Helper type guard functions for narrowing types
-function isTextPayload(payload: unknown): payload is TextPayload {
-  return typeof payload === 'object' && payload !== null && 'Text' in payload;
+// Type Guards to safely check payload structures
+function isTextMessagePayload(payload: unknown): payload is TextMessagePayload {
+    return typeof payload === 'object' && payload !== null && 'Text' in payload && typeof (payload as TextMessagePayload).Text === 'string';
 }
 
-function isMessagesPayload(payload: unknown): payload is MessagesPayload {
-  return typeof payload === 'object' && payload !== null && 'Messages' in payload && Array.isArray((payload as MessagesPayload).Messages);
+function isMessagesContainerPayload(payload: unknown): payload is MessagesContainerPayload {
+    return typeof payload === 'object' && payload !== null && 'Messages' in payload && Array.isArray((payload as MessagesContainerPayload).Messages);
 }
 
-function extractChatItems(bc: Blockchain, myPub?: string, filter?: string | null): ChatItem[] {
+function extractFromBlock(
+  b: Block, // 'b' is now typed as Block, which is good!
+  myPub?: string,
+  filter?: string | null
+): ChatItem[] {
   const items: ChatItem[] = [];
-  for (const b of bc.chain) {
-    // Attempt to get timestamp_ms directly from the block if available,
-    // otherwise default to 0. Casting to 'Block' type here assuming
-    // Blockchain.chain contains 'Block' type objects.
-    const ts = (b as Block)?.timestamp_ms ?? 0;
+  // Use optional chaining or direct access if 'timestamp_ms' is guaranteed on Block
+  const ts = b.timestamp_ms ?? 0; // Removed (b as any), relying on Block type
 
-    let payload: unknown = undefined;
-    try {
-      payload = JSON.parse(b.raw_data);
-    } catch {
-      payload = b.raw_data;
-    }
-
-    /* Case A: payload is plain string */
-    if (typeof payload === 'string') {
-      const tagged = parseTaggedText(payload);
-      // filter check
-      if (filter && tagged.to !== filter) continue;
-      items.push({
-        key: `${b.index}:txt`,
-        from: b.hash.slice(0, 8), // unknown sender in legacy; show block hash
-        to: tagged.to,
-        text: tagged.text,
-        ts,
-        mine: false, // legacy broadcast unknown
-      });
-      continue;
-    }
-
-    /* Case B: payload enum { Text: "..."} */
-    if (isTextPayload(payload)) { // Use type guard here
-      const txt = payload.Text; // Now `payload` is correctly typed as `TextPayload`
-      const tagged = parseTaggedText(txt);
-      if (filter && tagged.to !== filter) continue;
-      items.push({
-        key: `${b.index}:TxtEnum`,
-        from: b.hash.slice(0, 8),
-        to: tagged.to,
-        text: tagged.text,
-        ts,
-        mine: false,
-      });
-      continue;
-    }
-
-    /* Case C: payload enum { Messages: [...] } */
-    if (isMessagesPayload(payload)) { // Use type guard here
-      const msgs = payload.Messages; // Now `payload` is correctly typed as `MessagesPayload`
-      for (const m of msgs) {
-        if (filter && m.from !== filter && m.to !== filter) continue;
-        items.push({
-          key: `${b.index}:${m.id}`,
-          from: m.from,
-          to: m.to ?? undefined,
-          text: m.content,
-          ts: m.timestamp_ms ?? ts,
-          mine: !!myPub && m.from === myPub,
-        });
-      }
-      continue;
-    }
-
-    /* Fallback: show raw */
-    if (!filter) {
-      items.push({
-        key: `${b.index}:raw`,
-        from: b.hash.slice(0, 8),
-        text: JSON.stringify(payload),
-        ts,
-        mine: false,
-      });
-    }
+  // ----- Source A: legacy `data` field -----
+  if (typeof b.data === 'string') {
+    const tagged = parseTaggedText(b.data);
+    if (filter && tagged.to !== filter) return items;
+    items.push({
+      key: `${b.index}:data`,
+      from: b.hash.slice(0, 8),
+      to: tagged.to,
+      text: tagged.text,
+      ts,
+      mine: false, // can't know sender
+    });
+    return items;
   }
 
-  items.sort((a, b) => a.ts - b.ts);
+  // ----- Source B: raw_data JSON value -----
+  let payload: unknown; // Keep as unknown initially
+  try {
+    payload = JSON.parse(b.raw_data ?? 'null');
+  } catch {
+    payload = b.raw_data; // Fallback: if parse fails, keep raw_data as is (could be string)
+  }
+
+  // string
+  if (typeof payload === 'string') {
+    const tagged = parseTaggedText(payload);
+    if (filter && tagged.to !== filter) return items;
+    items.push({
+      key: `${b.index}:rawstr`,
+      from: b.hash.slice(0, 8),
+      to: tagged.to,
+      text: tagged.text,
+      ts,
+      mine: false,
+    });
+    return items;
+  }
+
+  // enum { Text: "..." }
+  // Use the type guard here to narrow the type of 'payload'
+  if (isTextMessagePayload(payload)) {
+    const txt = payload.Text; // 'payload' is now safely 'TextMessagePayload'
+    const tagged = parseTaggedText(txt);
+    if (filter && tagged.to !== filter) return items;
+    items.push({
+      key: `${b.index}:TextEnum`,
+      from: b.hash.slice(0, 8),
+      to: tagged.to,
+      text: tagged.text,
+      ts,
+      mine: false,
+    });
+    return items;
+  }
+
+  // enum { Messages: [...] }
+  // Use the type guard here to narrow the type of 'payload'
+  if (isMessagesContainerPayload(payload)) {
+    const msgs = payload.Messages; // 'payload' is now safely 'MessagesContainerPayload'
+    for (const m of msgs) {
+      if (filter && m.from !== filter && m.to !== filter) continue;
+      items.push({
+        key: `${b.index}:${m.id}`,
+        from: m.from,
+        to: m.to ?? undefined,
+        text: m.content,
+        ts: m.timestamp_ms ?? ts,
+        mine: !!myPub && m.from === myPub,
+      });
+    }
+    return items;
+  }
+
+  // fallback: show raw if no peer filter
+  if (!filter) {
+    items.push({
+      key: `${b.index}:fallback`,
+      from: b.hash.slice(0, 8),
+      text: JSON.stringify(payload),
+      ts,
+      mine: false,
+    });
+  }
   return items;
+}
+
+function extractChatItems(
+  bc: Blockchain,
+  myPub?: string,
+  filter?: string | null
+): ChatItem[] {
+  const list: ChatItem[] = [];
+  for (const b of bc.chain) {
+    list.push(...extractFromBlock(b, myPub, filter));
+  }
+  list.sort((a, b) => a.ts - b.ts);
+  return list;
 }
 
 export const ChatView: React.FC<Props> = ({ blockchain, myPubkeyB64, peerFilter }) => {
