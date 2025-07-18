@@ -1,5 +1,16 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
+//! WiChain Tauri backend bootstrap (LAN P2P messaging demo).
+//!
+//! Responsibilities
+//! ----------------
+//! • Resolve per-user data dir.
+//! • Load/save identity (alias + Ed25519 keys, base64).
+//! • Load/save local blockchain (append-only log of chat events).
+//! • Start UDP LAN node for discovery + message relay.
+//! • Bridge network events -> frontend window events (`peer_update`, `chain_update`).
+//! • Provide Tauri commands the UI can call.
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -13,14 +24,18 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
 
-use tauri::{Manager, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
 
+/// UDP port used for WiChain LAN discovery/traffic.
 const WICHAIN_PORT: u16 = 60000;
+
+/// Relative filename for persisted blockchain.
 const BLOCKCHAIN_FILE: &str = "blockchain.json";
 
+/// Identity persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredIdentity {
     pub alias: String,
@@ -28,6 +43,7 @@ pub struct StoredIdentity {
     pub public_key_b64: String,
 }
 
+/// Shared state for Tauri commands.
 pub struct AppState {
     pub identity: StoredIdentity,
     pub signing_key: SigningKey,
@@ -44,7 +60,9 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            // Data directory
+            //
+            // ── Data directory ────────────────────────────────────────────────────────
+            //
             let mut data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
             data_dir.push("WiChain");
             if let Err(e) = fs::create_dir_all(&data_dir) {
@@ -52,7 +70,9 @@ fn main() {
             }
             info!("✅ App data dir: {:?}", data_dir);
 
-            // Identity
+            //
+            // ── Identity ─────────────────────────────────────────────────────────────
+            //
             let mut identity = load_or_create_identity(&data_dir);
             let signing_key = decode_signing_key(&identity).unwrap_or_else(|e| {
                 warn!("Identity decode error ({e}); regenerating.");
@@ -60,11 +80,14 @@ fn main() {
                 decode_signing_key(&identity).expect("fresh identity must decode")
             });
             info!(
-                "✅ Identity alias: {}  (pubkey {} chars)",
-                identity.alias, identity.public_key_b64.len()
+                "✅ Identity alias: {}  (pubkey {} chars)",
+                identity.alias,
+                identity.public_key_b64.len()
             );
 
-            // Blockchain
+            //
+            // ── Blockchain ───────────────────────────────────────────────────────────
+            //
             let blockchain_path = data_dir.join(BLOCKCHAIN_FILE);
             let blockchain = if blockchain_path.exists() {
                 match Blockchain::load_from_file(&blockchain_path) {
@@ -83,8 +106,10 @@ fn main() {
             };
             let blockchain = Arc::new(Mutex::new(blockchain));
 
-            // Network Node
-            let node_id = identity.public_key_b64.clone();
+            //
+            // ── Network Node ─────────────────────────────────────────────────────────
+            //
+            let node_id = identity.public_key_b64.clone(); // node id == b64 public key
             let node = Arc::new(NetworkNode::new(
                 WICHAIN_PORT,
                 node_id.clone(),
@@ -94,22 +119,31 @@ fn main() {
 
             let (tx, mut rx) = mpsc::channel::<NetworkMessage>(64);
 
+            // Start the async network tasks.
             {
                 let node = node.clone();
                 tauri::async_runtime::spawn(async move {
                     node.start(tx).await;
                 });
             }
-            info!("✅ Node started: alias={} id={} port={}", identity.alias, node_id, WICHAIN_PORT);
+            info!(
+                "✅ Node started: alias={} id={} port={}",
+                identity.alias, node_id, WICHAIN_PORT
+            );
 
-            // Background task for processing network messages
+            //
+            // ── Network -> State -> UI bridge task ───────────────────────────────────
+            //
             {
-                let blockchain = blockchain.clone();
+                let blockchain = Arc::clone(&blockchain);
                 let blockchain_path = blockchain_path.clone();
                 let app_handle_for_task = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = rx.recv().await {
                         match msg {
+                            // -----------------------------------------------------------------
+                            // Legacy full-chain broadcast
+                            // -----------------------------------------------------------------
                             NetworkMessage::Block { block_json } => {
                                 match serde_json::from_str::<Blockchain>(&block_json) {
                                     Ok(incoming_chain) => {
@@ -118,7 +152,9 @@ fn main() {
                                         let incoming_len = incoming_chain.chain.len();
                                         if incoming_chain.is_valid() && incoming_len > local_len {
                                             *chain_guard = incoming_chain;
-                                            if let Err(e) = chain_guard.save_to_file(&blockchain_path) {
+                                            if let Err(e) =
+                                                chain_guard.save_to_file(&blockchain_path)
+                                            {
                                                 error!("Failed saving updated chain: {e}");
                                             } else {
                                                 info!(
@@ -132,6 +168,29 @@ fn main() {
                                     Err(e) => warn!("⚠ Failed to parse incoming blockchain JSON: {e}"),
                                 }
                             }
+
+                            // -----------------------------------------------------------------
+                            // New direct peer → peer block payload
+                            //   For now treat payload_json as *text* content and append
+                            //   a local text block tagged w/ peer ids so UI can filter.
+                            // -----------------------------------------------------------------
+                            NetworkMessage::DirectBlock { from, to, payload_json } => {
+                                let mut chain_guard = blockchain.lock().await;
+                                // We store: @peer:<from>:<to>:::<content>
+                                // (Double-colon separates ids from content; easy split in UI)
+                                let payload = format!("@peer:{from}:{to}:::{payload_json}");
+                                chain_guard.add_text_block(payload);
+                                if let Err(e) =
+                                    chain_guard.save_to_file(&blockchain_path)
+                                {
+                                    warn!("Failed saving chain after direct block: {e}");
+                                }
+                                let _ = app_handle_for_task.emit("chain_update", ());
+                            }
+
+                            // -----------------------------------------------------------------
+                            // Peer table change signals
+                            // -----------------------------------------------------------------
                             NetworkMessage::Peer { .. }
                             | NetworkMessage::Ping { .. }
                             | NetworkMessage::Pong { .. } => {
@@ -143,6 +202,9 @@ fn main() {
                 });
             }
 
+            //
+            // ── Install shared state ─────────────────────────────────────────────────
+            //
             let state = AppState {
                 identity,
                 signing_key,
@@ -163,6 +225,10 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("Error running Tauri");
 }
+
+// ============================================================================
+// Identity helpers
+// ============================================================================
 
 fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     let priv_bytes = base64::engine::general_purpose::STANDARD
@@ -190,8 +256,10 @@ fn load_or_create_identity(dir: &Path) -> StoredIdentity {
 fn regenerate_identity(dir: &Path) -> StoredIdentity {
     let signing_key = SigningKey::generate(&mut OsRng);
     let alias = format!("Anon-{}", rand::random::<u16>());
-    let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
-    let private_key_b64 = base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes());
+    let public_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+    let private_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes());
 
     let id = StoredIdentity {
         alias,
@@ -205,7 +273,10 @@ fn regenerate_identity(dir: &Path) -> StoredIdentity {
     id
 }
 
-// ─── Tauri Commands ───────────────────────────────────────────────────────────
+// ============================================================================
+// Tauri Commands
+// ============================================================================
+
 #[tauri::command]
 async fn get_identity(state: tauri::State<'_, AppState>) -> Result<StoredIdentity, String> {
     Ok(state.identity.clone())
@@ -222,20 +293,54 @@ async fn get_blockchain_json(state: tauri::State<'_, AppState>) -> Result<String
     serde_json::to_string_pretty(&*chain).map_err(|e| e.to_string())
 }
 
+/// Add a text message. If `to_peer` is `Some(id)` we send directly; else broadcast
+/// to **all** peers (group chat) by sending a DirectBlock to each.
+/// We also append *locally* so history persists across runs.
+///
+/// NOTE: We accept `to_peer` from the frontend as an **Option<String>**. In JS
+/// call this with `{ to_peer: someIdOrNull }`.
 #[tauri::command]
 async fn add_text_message(
+    app: AppHandle,                  // for event emit
     state: tauri::State<'_, AppState>,
     content: String,
+    to_peer: Option<String>,
 ) -> Result<String, String> {
+    // Append locally + persist.
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(content.clone());
+        let payload = if let Some(ref peer_id) = to_peer {
+            format!("@peer:{peer_id}:::{content}")
+        } else {
+            content.clone()
+        };
+        chain.add_text_block(payload);
         if let Err(e) = chain.save_to_file(&state.blockchain_path) {
             return Err(format!("save error: {e}"));
         }
-        let json = serde_json::to_string(&*chain).map_err(|e| e.to_string())?;
-        info!("📡 Broadcasting blockchain with {} blocks", chain.chain.len());
-        state.node.broadcast_block(json).await;
     }
+
+    // Let UI update immediately.
+    let _ = app.emit("chain_update", ());
+
+    // Send over network.
+    match to_peer {
+        Some(peer_id) => {
+            // Direct to a single peer
+            if let Err(e) = state.node.send_direct_block(&peer_id, content.clone()).await {
+                warn!("Failed sending direct block to {peer_id}: {e}");
+            }
+        }
+        None => {
+            // Broadcast group chat: send direct to every peer we know
+            let peers = state.node.list_peers().await;
+            for peer in peers {
+                if let Err(e) = state.node.send_direct_block(&peer.id, content.clone()).await {
+                    warn!("Failed sending group msg to {}: {e}", peer.id);
+                }
+            }
+        }
+    }
+
     Ok("ok".into())
 }

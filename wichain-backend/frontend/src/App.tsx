@@ -15,19 +15,19 @@ import { ChatView } from './components/ChatView';
 import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
-  /* Identity */
+  /* ── Identity (load once) ───────────────────────────────────────────── */
   const [identity, setIdentity] = useState<Identity | null>(null);
   useEffect(() => {
     apiGetIdentity().then(setIdentity).catch(console.error);
   }, []);
 
-  /* Peers */
+  /* ── Peers (event + poll) ───────────────────────────────────────────── */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const refreshPeers = useCallback(() => {
     apiGetPeers().then(setPeers).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshPeers();
+    refreshPeers(); // initial
     const unlistenPromise = listen('peer_update', refreshPeers);
     const interval = setInterval(refreshPeers, 5_000);
     return () => {
@@ -36,13 +36,13 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  /* Blockchain */
+  /* ── Blockchain (event + poll) ──────────────────────────────────────── */
   const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
   const refreshChain = useCallback(() => {
     apiGetBlockchain().then(setBlockchain).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshChain();
+    refreshChain(); // initial
     const unlistenPromise = listen('chain_update', refreshChain);
     const interval = setInterval(refreshChain, 10_000);
     return () => {
@@ -51,10 +51,10 @@ export default function App() {
     };
   }, [refreshChain]);
 
-  /* Selected peer */
+  /* ── Selected peer (filter) ─────────────────────────────────────────── */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
-  /* Send */
+  /* ── Send message ───────────────────────────────────────────────────── */
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
@@ -65,11 +65,12 @@ export default function App() {
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain();
+      refreshChain(); // optimistic local refresh
     }
   }, [text, selectedPeer, refreshChain]);
 
-  const myPub = identity?.public_key_b64 ?? '';
+  /* ── Identity key display ───────────────────────────────────────────── */
+  const myPub = identity?.public_key_b64 ?? identity?.public_key ?? '';
 
   return (
     <div className="app-root">
@@ -84,7 +85,11 @@ export default function App() {
       <div className="app-main">
         <aside className="sidebar">
           <h2>Peers</h2>
-          <PeerList peers={peers} selected={selectedPeer} onSelect={setSelectedPeer} />
+          <PeerList
+            peers={peers}
+            selected={selectedPeer}
+            onSelect={setSelectedPeer}
+          />
         </aside>
 
         <section className="chat-section">
@@ -96,9 +101,7 @@ export default function App() {
           <div className="chat-input-row">
             <input
               type="text"
-              placeholder={
-                selectedPeer ? `Message peer…` : 'Broadcast message…'
-              }
+              placeholder={selectedPeer ? 'Message peer…' : 'Broadcast message…'}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {

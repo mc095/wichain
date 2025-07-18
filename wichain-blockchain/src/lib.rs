@@ -1,13 +1,18 @@
 //! WiChain Blockchain crate.
 //!
-//! Re-exports core types and provides a minimal append‑only ledger that can hold
-//! either plain text (legacy) or signed chat messages (preferred).
+//! Provides a *very* lightweight append‑only ledger used by the WiChain demo.
+//! Blocks contain an opaque `data: String`; helper constructors let higher‑level
+//! code embed structured chat payloads (serialized `SignedMessage`s) or plain
+//! text. The chain is validated by hash linking; apps may perform deeper
+//! validation (e.g., verifying embedded signatures).
+//!
+//! Re‑exports the public surface from the `block` and `blockchain` modules.
 
 pub mod block;
 pub mod blockchain;
 
 pub use block::{current_timestamp_ms, Block};
-pub use blockchain::{Blockchain, BlockSummary, ChainSummary};
+pub use blockchain::{BlockSummary, Blockchain, ChainSummary};
 
 #[cfg(test)]
 mod tests {

@@ -1,12 +1,15 @@
 //! Minimal append‑only blockchain for WiChain.
 //!
 //! - Genesis block created automatically.
-//! - Blocks store opaque `data: String` but helpers allow structured
-//!   `SignedMessage` arrays.
-//! - Validation checks hash links; optional deep validation can also re‑hash
-//!   and verify embedded signed messages.
+//! - Blocks store opaque `data: String` but helpers allow:
+//!   - Legacy text (`add_text_block`)
+//!   - Structured signed message arrays (`add_message_block`, `add_messages_block`)
+//!   - Direct peer‑to‑peer text payload (`add_direct_text_block`)
+//!
+//! Validation checks hash links; `validate_deep()` optionally re‑verifies
+//! embedded `SignedMessage`s.
 
-use crate::block::{current_timestamp_ms, Block};
+use crate::block::{current_timestamp_ms, Block, DirectTextPayload};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufReader, Write};
@@ -14,7 +17,6 @@ use std::path::Path;
 
 use wichain_core::SignedMessage;
 
-/// Chain wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Blockchain {
     pub chain: Vec<Block>,
@@ -69,8 +71,31 @@ impl Blockchain {
         self.chain.last().unwrap()
     }
 
+    /// NEW: append a **direct peer‑to‑peer text** block.
+    ///
+    /// `from` and `to` should be base64 pubkeys (the same strings used as IDs
+    /// in the network layer). This is what you'll call when the user selects a
+    /// peer in the UI and sends a message.
+    pub fn add_direct_text_block(&mut self, from: &str, to: &str, text: &str) -> &Block {
+        let prev = self.last_block();
+        let b = Block::new_direct(
+            self.chain.len() as u64,
+            current_timestamp_ms(),
+            prev.hash.clone(),
+            from,
+            to,
+            text,
+        );
+        self.chain.push(b);
+        self.chain.last().unwrap()
+    }
+
+    /// Helper used when *receiving* a direct message from a peer (identical to `add_direct_text_block` but kept for intent).
+    pub fn append_foreign_direct(&mut self, from: &str, to: &str, text: &str) -> &Block {
+        self.add_direct_text_block(from, to, text)
+    }
+
     /// Basic integrity check: ensure hash chain is unbroken and hashes recompute.
-    /// This mirrors the historical behavior and is cheap.
     pub fn is_valid(&self) -> bool {
         if self.chain.is_empty() {
             return false;
@@ -149,9 +174,19 @@ impl Blockchain {
             .flatten()
             .collect()
     }
+
+    /// Return all decoded **direct text messages** (local + foreign).
+    pub fn all_direct_text(&self) -> Vec<DirectTextPayload> {
+        self.chain
+            .iter()
+            .filter_map(|b| b.as_direct_text())
+            .collect()
+    }
 }
 
-/// Lightweight summaries for UI / API.
+/* ------------------------------------------------------------------------- */
+/* UI Summaries                                                              */
+/* ------------------------------------------------------------------------- */
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockSummary {
@@ -165,29 +200,49 @@ pub struct BlockSummary {
 
 impl BlockSummary {
     pub fn from_block(b: &Block, preview_len: usize) -> Self {
-        let (message_count, preview) = if let Some(msgs) = b.as_messages() {
+        // message array?
+        if let Some(msgs) = b.as_messages() {
             let count = msgs.len();
-            let p = if count == 1 {
+            let preview = if count == 1 {
                 msgs[0].content.clone()
             } else {
                 format!("{count} messages")
             };
-            (count, p)
-        } else {
-            let raw = b.raw_data();
-            let p = if raw.len() > preview_len {
-                format!("{}...", &raw[..preview_len])
-            } else {
-                raw.to_string()
+            return Self {
+                index: b.index,
+                timestamp_ms: b.timestamp_ms,
+                hash: b.hash.clone(),
+                previous_hash: b.previous_hash.clone(),
+                message_count: count,
+                preview,
             };
-            (0, p)
+        }
+
+        // direct?
+        if let Some(dt) = b.as_direct_text() {
+            return Self {
+                index: b.index,
+                timestamp_ms: b.timestamp_ms,
+                hash: b.hash.clone(),
+                previous_hash: b.previous_hash.clone(),
+                message_count: 1,
+                preview: dt.text,
+            };
+        }
+
+        // raw text fallback
+        let raw = b.raw_data();
+        let preview = if raw.len() > preview_len {
+            format!("{}...", &raw[..preview_len])
+        } else {
+            raw.to_string()
         };
         Self {
             index: b.index,
             timestamp_ms: b.timestamp_ms,
             hash: b.hash.clone(),
             previous_hash: b.previous_hash.clone(),
-            message_count,
+            message_count: 0,
             preview,
         }
     }
@@ -243,6 +298,16 @@ mod tests {
         let all = bc.all_messages();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].content, "hi");
+    }
+
+    #[test]
+    fn test_direct_text_block() {
+        let mut bc = Blockchain::new();
+        bc.add_direct_text_block("FROM", "TO", "hello");
+        assert!(bc.is_valid());
+        let d = bc.all_direct_text();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].text, "hello");
     }
 
     #[test]

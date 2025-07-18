@@ -38,6 +38,7 @@ export interface Identity {
   alias: string;
   private_key_b64: string;
   public_key_b64: string;
+  public_key?: string;
 }
 
 /* ---------- Helpers ---------- */
@@ -115,7 +116,14 @@ export async function apiGetBlockchain(): Promise<Blockchain> {
  * filtering works in ChatView: "@peer:<id>:::<text>"
  */
 export async function apiAddMessage(text: string, toPeerId?: string | null): Promise<boolean> {
-  const content = toPeerId ? `@peer:${toPeerId}:::${text}` : text;
-  await invoke<string>('add_text_message', { content });
-  return true;
+  try {
+    await invoke<string>('add_text_message', {
+      content: text,
+      toPeer: toPeerId ?? null,
+    });
+    return true;
+  } catch (err) {
+    console.error('add_text_message failed', err);
+    return false;
+  }
 }

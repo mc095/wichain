@@ -1,12 +1,20 @@
-//! WiChain LAN networking (UDP broadcast discovery + lightweight sync).
+//! WiChain LAN networking (UDP broadcast discovery + lightweight direct send).
 //!
-//! - Broadcast own presence (Peer message) on an interval.
-//! - Broadcast Ping; respond with Pong (unicast back to sender).
-//! - Track peers in memory (id -> PeerInfo, with last_seen).
-//! - Forward **all** network messages up to caller via mpsc channel.
-//! - Broadcast blockchain updates (compat mode: full-chain JSON).
+//! Responsibilities
+//! ----------------
+//! • Periodically broadcast presence (Peer) + Ping via UDP broadcast.
+//! • Reply to incoming Ping with unicast Pong.
+//! • Track peers (id -> last SocketAddr + metadata).
+//! • Expose async snapshot of peers to callers.
+//! • Forward *all* decoded `NetworkMessage`s to caller over mpsc channel.
+//! • Provide `send_direct_block()` to unicast JSON payloads to a specific peer.
+//! • (Legacy) Provide `broadcast_block()` to broadcast a whole‑chain JSON blob.
 //!
-//! Tested on Windows LAN; requires firewall allowance for UDP 60000.
+//! Notes
+//! -----
+//! • `id` == base64(pubkey) across crates.
+//! • We record the last source socket address seen for each peer; directs use it.
+//! • Windows firewall must allow UDP on the configured port (default 60000).
 
 use std::{
     collections::HashMap,
@@ -15,6 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
@@ -22,14 +31,14 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-/// UDP broadcast + ping frequency.
+/// Interval for presence + ping broadcast.
 const BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
-/// Drop peers we haven't heard from in this many seconds.
+/// Drop peers after this many seconds without traffic.
 const PEER_STALE_SECS: u64 = 30;
-/// Max datagram we'll parse.
+/// Max inbound datagram we’ll accept.
 const MAX_DGRAM: usize = 8 * 1024;
 
-/// Info we expose to the UI for a discovered peer.
+/// Info exposed to UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub id: String,     // base64 pubkey (node id)
@@ -38,40 +47,46 @@ pub struct PeerInfo {
     pub last_seen_ms: u64,
 }
 
-/// Messages sent on the LAN.
+/// Messages sent on LAN.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NetworkMessage {
-    /// Legacy presence announce; still used for compat.
     Peer {
         id: String,
         alias: String,
         pubkey: String,
     },
-    /// Full‑chain broadcast (compat mode).
-    Block {
-        block_json: String,
-    },
-    /// Ping broadcast (discovery).
     Ping {
         id: String,
         alias: String,
     },
-    /// Pong unicast reply to Ping.
     Pong {
         id: String,
         alias: String,
     },
+
+    /// Legacy: full chain broadcast.
+    Block {
+        block_json: String,
+    },
+
+    /// Direct peer‑to‑peer payload (typically a single block or chat batch).
+    /// `payload_json` is opaque to the network layer.
+    DirectBlock {
+        from: String,
+        to: String,
+        payload_json: String,
+    },
 }
 
-/// Internal peer entry with Instant.
+/// Internal peer entry with Instant + last source address.
 #[derive(Debug, Clone)]
 struct PeerEntry {
     info: PeerInfo,
     last_seen: Instant,
+    last_addr: SocketAddr,
 }
 
-/// Network node object.
 pub struct NetworkNode {
     port: u16,
     pub id: String,
@@ -93,28 +108,25 @@ impl NetworkNode {
 
     /// Start all network tasks. Caller supplies mpsc sender to receive *all* network messages.
     pub async fn start(&self, tx: mpsc::Sender<NetworkMessage>) {
-        // Bind UDP listener.
         let bind_addr = format!("0.0.0.0:{}", self.port);
         let socket = match UdpSocket::bind(&bind_addr).await {
             Ok(s) => {
-                if let Err(e) = s.set_broadcast(true) {
-                    warn!("Failed to enable UDP broadcast: {e:?}");
-                }
+                let _ = s.set_broadcast(true);
                 info!("✅ Listening on {}", bind_addr);
                 s
             }
             Err(e) => {
-                error!("❌ Failed to bind UDP socket on {}: {e:?}", bind_addr);
+                error!("❌ Failed to bind UDP socket: {e:?}");
                 return;
             }
         };
         let socket = Arc::new(socket);
 
-        // Spawn receive loop
+        // Receiver loop.
         {
-            let socket = socket.clone();
+            let socket = Arc::clone(&socket);
             let tx = tx.clone();
-            let peers = self.peers.clone();
+            let peers = Arc::clone(&self.peers);
             let my_id = self.id.clone();
             let my_alias = self.alias.clone();
             let port = self.port;
@@ -123,9 +135,9 @@ impl NetworkNode {
             });
         }
 
-        // Spawn periodic broadcast (Peer + Ping)
+        // Periodic broadcast loop.
         {
-            let socket = socket.clone();
+            let socket = Arc::clone(&socket);
             let id = self.id.clone();
             let alias = self.alias.clone();
             let pubkey = self.pubkey.clone();
@@ -136,7 +148,7 @@ impl NetworkNode {
         }
     }
 
-    /// Broadcast a *Block* network message (compat: full-chain JSON).
+    /// Broadcast full‑chain JSON (legacy compat; safe to remove if not needed).
     pub async fn broadcast_block(&self, block_json: String) {
         let bind_addr = "0.0.0.0:0";
         let socket = match UdpSocket::bind(bind_addr).await {
@@ -156,16 +168,38 @@ impl NetworkNode {
         }
     }
 
+    /// Send a direct payload to a known peer by *peer_id* (base64 pubkey).
+    pub async fn send_direct_block(&self, peer_id: &str, payload_json: String) -> Result<()> {
+        let addr = {
+            let peers = self.peers.lock().await;
+            peers
+                .get(peer_id)
+                .map(|p| p.last_addr)
+                .ok_or_else(|| anyhow!("Peer not found: {peer_id}"))?
+        };
+
+        // Build message.
+        let msg = NetworkMessage::DirectBlock {
+            from: self.id.clone(),
+            to: peer_id.to_string(),
+            payload_json,
+        };
+
+        // Bind ephemeral socket + send.
+        let bind_addr = "0.0.0.0:0";
+        let socket = UdpSocket::bind(bind_addr).await?;
+        socket.send_to(&serde_json::to_vec(&msg)?, addr).await?;
+        Ok(())
+    }
+
     /// Async snapshot of current peers for UI.
     pub async fn list_peers(&self) -> Vec<PeerInfo> {
         let map = self.peers.lock().await;
-        map.values()
-            .map(|p| p.info.clone())
-            .collect::<Vec<PeerInfo>>()
+        map.values().map(|p| p.info.clone()).collect()
     }
 }
 
-/// Receive loop task.
+/// Receiver loop.
 async fn recv_loop(
     socket: Arc<UdpSocket>,
     tx: mpsc::Sender<NetworkMessage>,
@@ -183,82 +217,49 @@ async fn recv_loop(
                 continue;
             }
         };
-        let slice = &buf[..len];
-        let msg: NetworkMessage = match serde_json::from_slice(slice) {
+        let msg: NetworkMessage = match serde_json::from_slice(&buf[..len]) {
             Ok(m) => m,
             Err(_) => continue,
         };
 
-        // Update peers based on message.
         match &msg {
             NetworkMessage::Peer { id, alias, pubkey } => {
-                update_peer(&peers, id, alias, pubkey).await;
+                update_peer(&peers, id, alias, pubkey, src).await;
             }
             NetworkMessage::Ping { id, alias } => {
-                // record sender
-                update_peer(&peers, id, alias, id).await;
+                update_peer(&peers, id, alias, id, src).await;
                 // reply Pong unicast
                 let pong = NetworkMessage::Pong {
                     id: my_id.clone(),
                     alias: my_alias.clone(),
                 };
-                if let Err(e) = send_to(&socket, &pong, src).await {
-                    warn!("Failed sending Pong to {src}: {e:?}");
-                }
+                let _ = send_to(&socket, &pong, src).await;
             }
             NetworkMessage::Pong { id, alias } => {
-                update_peer(&peers, id, alias, id).await;
+                update_peer(&peers, id, alias, id, src).await;
             }
             NetworkMessage::Block { .. } => {
-                // nothing to update in peer table
+                // no peer table data
+            }
+            NetworkMessage::DirectBlock { from, .. } => {
+                // we don't know remote alias/pubkey from this msg form,
+                // so we record minimal identity = from for all 3 fields.
+                update_peer(&peers, from, from, from, src).await;
             }
         }
 
-        // Forward to caller (best effort)
-        if tx.send(msg.clone()).await.is_err() {
-            warn!("network -> backend channel closed");
-        }
-
-        // opportunistic GC
+        let _ = tx.send(msg.clone()).await;
         maybe_gc_stale(&peers).await;
     }
 }
 
-/// Broadcast My Peer + Ping periodically.
-async fn periodic_broadcast(
-    socket: Arc<UdpSocket>,
-    id: String,
-    alias: String,
-    pubkey: String,
-    port: u16,
-) {
-    let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), port);
-    loop {
-        // Announce presence (legacy)
-        let announce = NetworkMessage::Peer {
-            id: id.clone(),
-            alias: alias.clone(),
-            pubkey: pubkey.clone(),
-        };
-        let _ = send_to(&socket, &announce, broadcast_addr).await;
-
-        // Ping
-        let ping = NetworkMessage::Ping {
-            id: id.clone(),
-            alias: alias.clone(),
-        };
-        let _ = send_to(&socket, &ping, broadcast_addr).await;
-
-        tokio::time::sleep(BROADCAST_INTERVAL).await;
-    }
-}
-
-/// Update (or insert) a peer entry.
+/// Update (or insert) peer entry.
 async fn update_peer(
     peers: &Arc<Mutex<HashMap<String, PeerEntry>>>,
     id: &str,
     alias: &str,
     pubkey: &str,
+    addr: SocketAddr,
 ) {
     let mut map = peers.lock().await;
     let now = Instant::now();
@@ -270,11 +271,13 @@ async fn update_peer(
             last_seen_ms: 0,
         },
         last_seen: now,
+        last_addr: addr,
     });
     entry.info.alias = alias.to_string();
     entry.info.pubkey = pubkey.to_string();
     entry.last_seen = now;
-    entry.info.last_seen_ms = 0; // we show 0.. updated lazily
+    entry.last_addr = addr;
+    entry.info.last_seen_ms = 0;
 }
 
 /// Drop stale peers (older than PEER_STALE_SECS).
@@ -284,9 +287,36 @@ async fn maybe_gc_stale(peers: &Arc<Mutex<HashMap<String, PeerEntry>>>) {
     map.retain(|_, p| p.last_seen >= cutoff);
 }
 
-/// Send a serialized message to `addr`.
+/// Serialize + send.
 async fn send_to(socket: &UdpSocket, msg: &NetworkMessage, addr: SocketAddr) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(msg).unwrap();
     socket.send_to(&bytes, addr).await?;
     Ok(())
+}
+
+/// Periodic broadcast of (Peer, Ping).
+async fn periodic_broadcast(
+    socket: Arc<UdpSocket>,
+    id: String,
+    alias: String,
+    pubkey: String,
+    port: u16,
+) {
+    let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), port);
+    loop {
+        let announce = NetworkMessage::Peer {
+            id: id.clone(),
+            alias: alias.clone(),
+            pubkey: pubkey.clone(),
+        };
+        let _ = send_to(&socket, &announce, broadcast_addr).await;
+
+        let ping = NetworkMessage::Ping {
+            id: id.clone(),
+            alias: alias.clone(),
+        };
+        let _ = send_to(&socket, &ping, broadcast_addr).await;
+
+        tokio::time::sleep(BROADCAST_INTERVAL).await;
+    }
 }
