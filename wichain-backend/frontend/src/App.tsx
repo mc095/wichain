@@ -15,30 +15,20 @@ import { ChatView } from './components/ChatView';
 import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
-  //
-  // ── Identity (load once) ───────────────────────────────────────────────
-  //
+  /* Identity */
   const [identity, setIdentity] = useState<Identity | null>(null);
   useEffect(() => {
-    apiGetIdentity()
-      .then((id) => setIdentity(id))
-      .catch(console.error);
+    apiGetIdentity().then(setIdentity).catch(console.error);
   }, []);
 
-  //
-  // ── Peers (event + poll) ───────────────────────────────────────────────
-  //
+  /* Peers */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const refreshPeers = useCallback(() => {
-    apiGetPeers()
-      .then((p) => setPeers(p))
-      .catch(console.error);
+    apiGetPeers().then(setPeers).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshPeers(); // initial
-    const unlistenPromise = listen('peer_update', () => {
-      refreshPeers();
-    });
+    refreshPeers();
+    const unlistenPromise = listen('peer_update', refreshPeers);
     const interval = setInterval(refreshPeers, 5_000);
     return () => {
       clearInterval(interval);
@@ -46,20 +36,14 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  //
-  // ── Blockchain (event + poll) ──────────────────────────────────────────
-  //
+  /* Blockchain */
   const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
   const refreshChain = useCallback(() => {
-    apiGetBlockchain()
-      .then((bc) => setBlockchain(bc))
-      .catch(console.error);
+    apiGetBlockchain().then(setBlockchain).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshChain(); // initial
-    const unlistenPromise = listen('chain_update', () => {
-      refreshChain();
-    });
+    refreshChain();
+    const unlistenPromise = listen('chain_update', refreshChain);
     const interval = setInterval(refreshChain, 10_000);
     return () => {
       clearInterval(interval);
@@ -67,32 +51,25 @@ export default function App() {
     };
   }, [refreshChain]);
 
-  //
-  // ── Selected peer (optional filter) ─────────────────────────────────────
-  //
+  /* Selected peer */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
-  //
-  // ── Sending messages ───────────────────────────────────────────────────
-  //
+  /* Send */
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
     if (!msg) return;
     setSending(true);
-    const ok = await apiAddMessage(msg);
+    const ok = await apiAddMessage(msg, selectedPeer);
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain(); // optimistic
+      refreshChain();
     }
-  }, [text, refreshChain]);
+  }, [text, selectedPeer, refreshChain]);
 
-  //
-  // ── Render ─────────────────────────────────────────────────────────────
-  //
-  const myPub = identity?.public_key ?? ''; // matches backend StoredIdentity
+  const myPub = identity?.public_key_b64 ?? '';
 
   return (
     <div className="app-root">
@@ -119,7 +96,9 @@ export default function App() {
           <div className="chat-input-row">
             <input
               type="text"
-              placeholder="Type message…"
+              placeholder={
+                selectedPeer ? `Message peer…` : 'Broadcast message…'
+              }
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -131,7 +110,7 @@ export default function App() {
               disabled={sending}
             />
             <button onClick={send} disabled={sending || !text.trim()}>
-              Send
+              {selectedPeer ? 'Send to Peer' : 'Broadcast'}
             </button>
           </div>
         </section>

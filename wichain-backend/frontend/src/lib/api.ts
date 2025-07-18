@@ -1,25 +1,12 @@
-// src/lib/api.ts
+// frontend/src/lib/api.ts
 import { invoke } from '@tauri-apps/api/core';
 
-// ---- Types that mirror backend (loose; tolerant of backend changes) ----
+/* ---------- Types ---------- */
 export interface PeerInfo {
   id: string;
   alias: string;
   pubkey: string;
-}
-
-export interface Block {
-  index: number;
-  timestamp_ms: number;         // if missing in JSON we patch
-  previous_hash: string;
-  nonce: number;
-  hash: string;
-  raw_data: string;
-  payload?: {
-    type: string;               // e.g., "Text", "Messages"
-    text?: string;
-    messages?: SignedMessage[];
-  };
+  last_seen_ms?: number;
 }
 
 export interface SignedMessage {
@@ -31,77 +18,60 @@ export interface SignedMessage {
   sig: string;
 }
 
+export interface Block {
+  index: number;
+  timestamp_ms: number;
+  previous_hash: string;
+  nonce: number;
+  hash: string;
+  raw_data: string; // serialized payload
+  // Optional decoded view:
+  payload?: unknown;
+}
+
 export interface Blockchain {
   chain: Block[];
 }
 
-// Accept a variety of identity return types
 export interface Identity {
-  alias?: string;
-  public_key?: string;
-  private_key?: string;
-  id_string?: string; // fallback when backend returns plain string
+  alias: string;
+  private_key_b64: string;
+  public_key_b64: string;
 }
 
-// ---- Helpers ----
-function safeParseJson<T>(s: unknown): T | null {
-  if (typeof s !== 'string') return null;
+/* ---------- Helpers ---------- */
+function parseJson<T>(v: unknown): T | null {
+  if (typeof v !== 'string') return null;
   try {
-    return JSON.parse(s) as T;
+    return JSON.parse(v) as T;
   } catch {
     return null;
   }
 }
 
-// ---- API calls ----
+/* ---------- API Calls ---------- */
 export async function apiGetIdentity(): Promise<Identity> {
-  try {
-    const res = await invoke<unknown>('get_identity'); // backend may return struct OR string
-    if (typeof res === 'string') {
-      return { id_string: res };
-    }
-    return res as Identity;
-  } catch (err) {
-    console.error('get_identity failed', err);
-    return { id_string: 'error' };
-  }
+  return invoke<Identity>('get_identity');
 }
 
 export async function apiGetPeers(): Promise<PeerInfo[]> {
-  try {
-    const peers = await invoke<unknown>('get_peers');
-    if (Array.isArray(peers)) {
-      return peers.map((p) => ({
-        id: p.id ?? '',
-        alias: p.alias ?? '(unknown)',
-        pubkey: p.pubkey ?? '',
-      }));
-    }
-    return [];
-  } catch (err) {
-    console.error('get_peers failed', err);
-    return [];
-  }
+  return invoke<PeerInfo[]>('get_peers');
 }
 
 export async function apiGetBlockchain(): Promise<Blockchain> {
-  try {
-    const res = await invoke<unknown>('get_blockchain');
-    // backend returns JSON string
-    const parsed = safeParseJson<Blockchain>(res);
-    return parsed ?? { chain: [] };
-  } catch (err) {
-    console.error('get_blockchain failed', err);
-    return { chain: [] };
-  }
+  // backend returns JSON string
+  const json = await invoke<string>('get_blockchain_json');
+  return parseJson<Blockchain>(json) ?? { chain: [] };
 }
 
-export async function apiAddMessage(text: string): Promise<boolean> {
-  try {
-    await invoke('add_message', { message: text });
-    return true;
-  } catch (err) {
-    console.error('add_message failed', err);
-    return false;
-  }
+/**
+ * Broadcast a text message.
+ * For *peer-targeted* UX we allow optional `toPeerId` (pubkey string)
+ * which we encode inline in the text: "@peer:<id>:::<text>"
+ * Backend still treats it as plain text; filtering done in UI.
+ */
+export async function apiAddMessage(text: string, toPeerId?: string | null): Promise<boolean> {
+  const content = toPeerId ? `@peer:${toPeerId}:::${text}` : text;
+  await invoke<string>('add_text_message', { content });
+  return true;
 }
