@@ -24,7 +24,9 @@ interface ChatItem {
   mine: boolean;
 }
 
-function parsePayload(data: string): ChatPayloadV1 | null {
+/** Try to parse ChatPayloadV1 from block data string. */
+function parsePayload(data: string): ChatPayloadV1 {
+  // First try canonical JSON
   try {
     const p = JSON.parse(data) as ChatPayloadV1;
     if (typeof p.text === 'string' && typeof p.from === 'string') {
@@ -33,6 +35,7 @@ function parsePayload(data: string): ChatPayloadV1 | null {
   } catch {
     /* ignore */
   }
+
   // legacy inline tag: @peer:<id>:::<text>
   const tag = '@peer:';
   if (data.startsWith(tag)) {
@@ -47,6 +50,7 @@ function parsePayload(data: string): ChatPayloadV1 | null {
       };
     }
   }
+
   // plain broadcast text fallback
   return {
     from: 'unknown',
@@ -56,6 +60,7 @@ function parsePayload(data: string): ChatPayloadV1 | null {
   };
 }
 
+/** Convert a Block to 0‑or‑1 ChatItems (newer chains store exactly one payload per block). */
 function itemsFromBlock(
   b: Block,
   myPub?: string,
@@ -65,10 +70,28 @@ function itemsFromBlock(
   const ts = b.timestamp_ms ?? 0;
   const effectiveData = b.data ?? b.raw_data ?? '';
   const payload = parsePayload(effectiveData);
-  if (!payload) return out;
+
+  // Conversation filtering:
+  // - If no filter: include everything (group view).
+  // - If filter set:
+  //     show if (payload.from === filter AND payload.to == myPub OR null)
+  //     OR (payload.to === filter AND payload.from == myPub)
+  //     OR (payload.from === filter AND payload.to === myPub)   (normal inbound)
   if (filter) {
-    if (payload.to !== filter && payload.from !== filter) return out;
+    const fromIsPeer = payload.from === filter;
+    const toIsPeer = payload.to === filter;
+    const fromIsMe = !!myPub && payload.from === myPub;
+    const toIsMe = !!myPub && payload.to === myPub;
+
+    const show =
+      (fromIsPeer && toIsMe) ||
+      (fromIsMe && toIsPeer) ||
+      // legacy broadcast tag to peer: include if from peer and no `to` parsed
+      (fromIsPeer && payload.to == null && fromIsMe === false);
+
+    if (!show) return out;
   }
+
   out.push({
     key: `${b.index}:${b.hash}`,
     from: payload.from,

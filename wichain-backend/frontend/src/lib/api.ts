@@ -40,8 +40,7 @@ export interface Identity {
 }
 
 /* ---------- Helpers ---------- */
-function parseJson<T>(v: unknown): T | null {
-  if (typeof v !== 'string') return null;
+function parseJson<T>(v: string): T | null {
   try {
     return JSON.parse(v) as T;
   } catch {
@@ -106,17 +105,8 @@ interface ParsedBlockchainResponse {
 }
 
 export async function apiGetBlockchain(): Promise<Blockchain> {
-  let json: unknown; // Changed 'string' to 'unknown' to avoid 'as any' directly on invoke
-  try {
-    // Rely on invoke's generic type for return value, not for argument
-    json = await invoke<string>('get_chat_history_json');
-  } catch {
-    json = await invoke<string>('get_blockchain_json');
-  }
-  
-  // Now, safely assert json is a string before parsing
-  const parsed = parseJson<ParsedBlockchainResponse>(json as string); 
-  
+  const json = await invoke<string>('get_blockchain_json');
+  const parsed = parseJson<ParsedBlockchainResponse>(json);
   if (!parsed || !Array.isArray(parsed.chain)) {
     return { chain: [] };
   }
@@ -151,15 +141,3 @@ export async function apiResetData(): Promise<boolean> {
     return false;
   }
 }
-
-// Note: Removed apiPingDiscover as it was not in the original App.tsx's api imports
-// If you need it, add it back and ensure your backend has the corresponding command.
-// export async function apiPingDiscover(): Promise<boolean> {
-//   try {
-//     await invoke('ping_discover');
-//     return true;
-//   } catch (err) {
-//     console.error('ping_discover failed', err);
-//     return false;
-//   }
-// }

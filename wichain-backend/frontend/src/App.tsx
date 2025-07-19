@@ -17,7 +17,8 @@ import { ChatView } from './components/ChatView';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window'; // CORRECTED: Changed currentWindow to getCurrentWindow
+// Fix: Use getCurrentWindow for Tauri v2
+import { getCurrentWindow } from '@tauri-apps/api/window'; // <-- THIS IS THE CRUCIAL CHANGE
 
 export default function App() {
   /* ---------------- Identity ---------------- */
@@ -68,7 +69,7 @@ export default function App() {
   useEffect(() => {
     refreshChain();
     const unlistenPromise = listen('chat_update', refreshChain);
-    const interval = setInterval(refreshChain, 10_000);
+    const interval = setInterval(refreshChain, 5_000); // tighter since per-message
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
@@ -89,7 +90,7 @@ export default function App() {
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain();
+      refreshChain(); // optimistic
     }
   }, [text, selectedPeer, refreshChain]);
 
@@ -100,8 +101,8 @@ export default function App() {
     const ok = await apiResetData();
     if (ok) {
       // reload the app; new identity will be generated
-      const current = getCurrentWindow(); // CORRECTED: Call getCurrentWindow()
-      await current.hide();              // Then use the returned window object
+      const current = getCurrentWindow(); // <-- CALL THE FUNCTION
+      await current.hide();             // <-- USE THE RETURNED OBJECT
       window.location.reload();
     }
   }
@@ -116,7 +117,7 @@ export default function App() {
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
 
-  // Filter out the current user from the peers list before passing to PeerList
+  // Remove self from displayed peers
   const displayedPeers = peers.filter((p) => p.id !== myPub);
 
   return (
@@ -142,11 +143,12 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-48 border-r border-neutral-800 p-2">
+        <aside className="w-52 border-r border-neutral-800 p-2">
           <PeerList
-            peers={displayedPeers} // Pass the filtered peers list
+            peers={displayedPeers}
             selected={selectedPeer}
             onSelect={setSelectedPeer}
+            // onFindPeers={refreshPeers} // This prop is not defined in PeerList component
           />
         </aside>
 
@@ -187,10 +189,7 @@ export default function App() {
 
       {/* Overlays */}
       {onboarding && identity && (
-        <Onboarding
-          initialAlias={identity.alias}
-          onDone={onboardingDone}
-        />
+        <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
       )}
       <ResetConfirm
         open={resetOpen}
