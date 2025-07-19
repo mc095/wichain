@@ -40,3 +40,4 @@ anyhow = "1.0"
 # local crates
 wichain-blockchain = { path = "../../wichain-blockchain" }
 wichain-network    = { path = "../../wichain-network" }
+futures = "0.3.31"

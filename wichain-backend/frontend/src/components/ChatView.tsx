@@ -5,26 +5,31 @@ import type { Blockchain, Block } from '../lib/api';
 interface Props {
   blockchain: Blockchain;
   myPubkeyB64?: string;
-  peerFilter: string; // required
+  peerFilter?: string | null;
 }
 
 interface ChatItem {
   key: string;
   from: string;
-  to?: string | null;
+  to: string;
   text: string;
   ts: number;
   mine: boolean;
 }
 
-interface CanonPayload {
+/* ------------------------------------------------------------------ */
+/* Parsing helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+interface JsonMsg {
   from?: string;
-  to?: string | null;
+  to?: string;
   text?: string;
   ts?: number;
 }
 
-function parseTaggedText(s: string): { to?: string; text: string } {
+/* legacy inline tag: @peer:<to>:::<text>  (no from info) */
+function parseLegacyTag(s: string): { to?: string; text: string } {
   const tag = '@peer:';
   if (s.startsWith(tag)) {
     const rest = s.slice(tag.length);
@@ -36,80 +41,80 @@ function parseTaggedText(s: string): { to?: string; text: string } {
   return { text: s };
 }
 
-function tryParseJson(s: string | undefined): unknown {
-  if (!s) return null;
+/* new canonical payload: JSON string {from,to,text,ts} */
+function parsePayload(s: string): { from?: string; to?: string; text: string; ts?: number } {
   try {
-    return JSON.parse(s);
+    const obj = JSON.parse(s) as JsonMsg;
+    if (typeof obj.text === 'string') {
+      return { from: obj.from, to: obj.to, text: obj.text, ts: obj.ts };
+    }
   } catch {
-    return s;
+    /* ignore */
   }
+  // fallback legacy
+  const leg = parseLegacyTag(s);
+  return { from: undefined, to: leg.to, text: leg.text, ts: undefined };
 }
 
-function itemsFromBlock(b: Block, myPub: string | undefined, peer: string): ChatItem[] {
-  const items: ChatItem[] = [];
+/* Convert a block to zero or more chat items (we only ever store one msg/block) */
+function itemsFromBlock(
+  b: Block,
+  myPub?: string,
+  filter?: string | null
+): ChatItem[] {
   const ts = b.timestamp_ms ?? 0;
 
-  // legacy data
-  if (typeof b.data === 'string') {
-    const tagged = parseTaggedText(b.data);
-    if (tagged.to !== peer) return items;
-    items.push({
-      key: `${b.index}:data`,
-      from: b.hash.slice(0, 8),
-      to: tagged.to,
-      text: tagged.text,
-      ts,
-      mine: false,
-    });
-    return items;
+  // choose payload source
+  const payloadStr =
+    typeof b.data === 'string'
+      ? b.data
+      : typeof b.raw_data === 'string'
+      ? b.raw_data
+      : '';
+
+  if (!payloadStr) return [];
+
+  const parsed = parsePayload(payloadStr);
+  const from = parsed.from ?? b.hash.slice(0, 8);
+  const to = parsed.to ?? '';
+  const text = parsed.text;
+  const msgTs = typeof parsed.ts === 'number' ? parsed.ts : ts;
+
+  // Filter: show only messages where (from==peer || to==peer) if filter provided.
+  if (filter) {
+    if (from !== filter && to !== filter) return [];
   }
 
-  // canonical / raw JSON
-  const raw = b.raw_data ?? b.data ?? '';
-  const payload = tryParseJson(raw);
-
-  if (typeof payload === 'string') {
-    const tagged = parseTaggedText(payload);
-    if (tagged.to !== peer) return items;
-    items.push({
-      key: `${b.index}:rawstr`,
-      from: b.hash.slice(0, 8),
-      to: tagged.to,
-      text: tagged.text,
-      ts,
-      mine: false,
-    });
-    return items;
-  }
-
-  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-    const p = payload as CanonPayload;
-    const from = p.from ?? b.hash.slice(0, 8);
-    const to = p.to ?? null;
-    if (to !== peer && from !== peer) return items;
-    items.push({
-      key: `${b.index}:canon`,
+  const mine = !!myPub && from === myPub;
+  return [
+    {
+      key: `${b.index}`,
       from,
       to,
-      text: p.text ?? '',
-      ts: typeof p.ts === 'number' ? p.ts : ts,
-      mine: !!myPub && from === myPub,
-    });
-    return items;
-  }
-
-  return items;
+      text,
+      ts: msgTs,
+      mine,
+    },
+  ];
 }
 
-function extractChatItems(bc: Blockchain, myPub: string | undefined, peer: string): ChatItem[] {
-  const list: ChatItem[] = [];
+/* flatten chain */
+function extractChatItems(
+  bc: Blockchain,
+  myPub?: string,
+  filter?: string | null
+): ChatItem[] {
+  const out: ChatItem[] = [];
   for (const b of bc.chain) {
-    list.push(...itemsFromBlock(b, myPub, peer));
+    out.push(...itemsFromBlock(b, myPub, filter));
   }
-  list.sort((a, b) => a.ts - b.ts);
-  return list;
+  out.sort((a, b) => a.ts - b.ts);
+  return out;
 }
 
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* ------------------------------------------------------------------ */
 export const ChatView: React.FC<Props> = ({ blockchain, myPubkeyB64, peerFilter }) => {
   const chatItems = useMemo(
     () => extractChatItems(blockchain, myPubkeyB64, peerFilter),
@@ -121,26 +126,35 @@ export const ChatView: React.FC<Props> = ({ blockchain, myPubkeyB64, peerFilter 
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatItems.length]);
 
+  if (!peerFilter) {
+    return (
+      <div className="text-center text-neutral-500 text-sm mt-8">
+        Select a peer in the sidebar to start chatting.
+      </div>
+    );
+  }
+
   return (
-    <div className="p-4 space-y-2">
+    <div className="space-y-2">
       {chatItems.map((c) => (
         <div
           key={c.key}
-          className={`flex ${c.mine ? 'justify-end' : 'justify-start'}`}
+          className={[
+            'max-w-xs sm:max-w-md md:max-w-lg lg:max-w-2xl',
+            'px-3 py-2 rounded-lg text-sm',
+            'whitespace-pre-wrap break-words',
+            c.mine
+              ? 'ml-auto bg-blue-600 text-neutral-50'
+              : 'mr-auto bg-neutral-800 text-neutral-100',
+          ].join(' ')}
           title={new Date(c.ts).toLocaleString()}
         >
           {!c.mine && (
-            <div className="mr-2 text-[10px] text-gray-500 self-end max-w-[8rem] truncate">
-              {c.from.slice(0, 10)}{c.to ? `→${c.to.slice(0, 6)}…` : ''}
+            <div className="text-[10px] mb-0.5 text-neutral-400">
+              {c.from.slice(0, 10)}…{c.to ? `→${c.to.slice(0, 6)}…` : ''}
             </div>
           )}
-          <div
-            className={`px-3 py-2 rounded-lg max-w-[75%] break-words text-sm ${
-              c.mine ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-100'
-            }`}
-          >
-            {c.text}
-          </div>
+          {c.text}
         </div>
       ))}
       <div ref={endRef} />

@@ -97,6 +97,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "ed25519-dalek",
+ "futures",
  "hex",
  "log",
  "rand 0.8.5",

@@ -179,6 +179,19 @@ impl NetworkNode {
         }
     }
 
+        /// Broadcast an arbitrary message (Peer announce etc.) one time.
+    pub async fn quick_broadcast(&self, msg: &NetworkMessage) -> anyhow::Result<()> {
+       
+        let bind_addr = "0.0.0.0:0";
+        let socket = UdpSocket::bind(bind_addr).await?;
+        let _ = socket.set_broadcast(true);
+        let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), self.port);
+        let bytes = serde_json::to_vec(msg)?;
+        socket.send_to(&bytes, broadcast_addr).await?;
+        Ok(())
+    }
+
+
     pub async fn list_peers(&self) -> Vec<PeerInfo> {
         let map = self.peers.lock().await;
         map.values().map(|p| p.info.clone()).collect()
@@ -269,6 +282,8 @@ async fn maybe_gc_stale(peers: &Arc<Mutex<HashMap<String, PeerEntry>>>) {
     let cutoff = Instant::now() - Duration::from_secs(PEER_STALE_SECS);
     map.retain(|_, p| p.last_seen >= cutoff);
 }
+
+
 
 async fn send_to(socket: &UdpSocket, msg: &NetworkMessage, addr: SocketAddr) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(msg).unwrap();

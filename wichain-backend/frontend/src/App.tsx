@@ -5,60 +5,26 @@ import {
   apiSetAlias,
   apiGetPeers,
   apiGetBlockchain,
-  apiAddMessage,
+  apiSendMessage,
   type Identity,
   type PeerInfo,
   type Blockchain,
 } from './lib/api';
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
+import { AliasModal } from './components/AliasModal';
 import { listen } from '@tauri-apps/api/event';
 import './App.css';
+import './index.css';
 
-/* --- Alias Modal ---------------------------------------------------------- */
-function AliasModal({
-  initial,
-  onSubmit,
-}: {
-  initial: string;
-  onSubmit: (alias: string) => void;
-}) {
-  const [val, setVal] = useState(initial);
-  return (
-    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-80">
-        <h2 className="text-lg font-semibold mb-3 text-gray-100">Set Device Name</h2>
-        <input
-          autoFocus
-          type="text"
-          className="w-full px-3 py-2 rounded-md bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          placeholder="e.g. Laptop-Office"
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-        />
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-sm font-medium disabled:opacity-40"
-            disabled={!val.trim()}
-            onClick={() => onSubmit(val.trim())}
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* --- App ------------------------------------------------------------------ */
 export default function App() {
-  /* Identity */
+  /* ─ Identity ─ */
   const [identity, setIdentity] = useState<Identity | null>(null);
   useEffect(() => {
     apiGetIdentity().then(setIdentity).catch(console.error);
   }, []);
 
-  /* Peers */
+  /* ─ Peers ─ */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const refreshPeers = useCallback(() => {
     apiGetPeers().then(setPeers).catch(console.error);
@@ -73,7 +39,7 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  /* Blockchain */
+  /* ─ Blockchain ─ */
   const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
   const refreshChain = useCallback(() => {
     apiGetBlockchain().then(setBlockchain).catch(console.error);
@@ -81,126 +47,152 @@ export default function App() {
   useEffect(() => {
     refreshChain();
     const unlistenPromise = listen('chain_update', refreshChain);
-    const interval = setInterval(refreshChain, 8_000);
+    const interval = setInterval(refreshChain, 10_000);
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
     };
   }, [refreshChain]);
 
-  /* Selected peer */
+  /* ─ Selected peer ─ */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
-  /* Send */
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
-  const send = useCallback(
-    async (e?: React.FormEvent) => {
-      e?.preventDefault();
-      const msg = text.trim();
-      if (!msg || !selectedPeer) return;
-      setSending(true);
-      const ok = await apiAddMessage(msg, selectedPeer);
-      setSending(false);
-      if (ok) {
-        setText('');
-        refreshChain();
-      }
+  /* ─ Alias modal ─ */
+  const [showAliasModal, setShowAliasModal] = useState(false);
+  useEffect(() => {
+    if (
+      identity &&
+      (identity.alias.trim() === '' || identity.alias.startsWith('Anon-'))
+    ) {
+      setShowAliasModal(true);
+    }
+  }, [identity]);
+
+  const handleAliasSave = useCallback(
+    async (alias: string) => {
+      await apiSetAlias(alias);
+      const updated = await apiGetIdentity();
+      setIdentity(updated);
+      setShowAliasModal(false);
+      refreshPeers();
     },
-    [text, selectedPeer, refreshChain]
+    [refreshPeers]
   );
 
-  /* Alias Rename Flow */
-const [showAliasModal, setShowAliasModal] = useState(false);
+  /* ─ Message entry ─ */
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
 
-// Open modal only on first load if alias is empty/Anon
-useEffect(() => {
-  if (
-    identity &&
-    (identity.alias.startsWith('Anon-') || !identity.alias.trim())
-  ) {
-    setShowAliasModal(true);
-  }
-}, [identity]);
-
-const applyAlias = useCallback(
-  async (alias: string) => {
-    await apiSetAlias(alias);
-    const updated = await apiGetIdentity();
-    setIdentity(updated);
-    setShowAliasModal(false); // close immediately
-    refreshPeers();
-  },
-  [refreshPeers]
-);
-
+  const send = useCallback(async () => {
+    const msg = text.trim();
+    if (!msg || !selectedPeer) return;
+    setSending(true);
+    const ok = await apiSendMessage(selectedPeer, msg);
+    setSending(false);
+    if (ok) {
+      setText('');
+      refreshChain();
+    }
+  }, [text, selectedPeer, refreshChain]);
 
   const myPub = identity?.public_key_b64 ?? '';
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-black text-gray-100">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 border-b border-gray-800">
-        <h1 className="text-xl font-semibold text-blue-400">WiChain</h1>
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col text-xs text-gray-400 text-right">
-            <span className="font-medium text-gray-100">{identity?.alias ?? '(unknown alias)'}</span>
-            <span className="font-mono">{myPub ? myPub.slice(0, 20) + '…' : '(no key)'}</span>
+    <div className="w-full h-screen bg-neutral-950 text-neutral-100 flex flex-col">
+      {showAliasModal && (
+        <AliasModal
+          initialAlias={identity?.alias ?? ''}
+          onSave={handleAliasSave}
+          onCancel={() => setShowAliasModal(false)}
+        />
+      )}
+
+      <header className="flex items-center justify-between px-4 py-2 border-b border-neutral-800 bg-neutral-900">
+        <h1 className="text-lg font-semibold">WiChain</h1>
+        <div className="text-right">
+          <div className="font-medium">{identity?.alias ?? '(unknown alias)'}</div>
+          <div className="text-xs text-neutral-400">
+            {myPub ? myPub.slice(0, 20) + '…' : '(no key)'}
           </div>
-          <button
-            onClick={() => setShowAliasModal(true)}
-            className="px-2 py-1 rounded-md bg-gray-800 hover:bg-gray-700 text-xs border border-gray-600"
-          >
-            Rename
-          </button>
         </div>
       </header>
 
-      {/* Main layout */}
-      <div className="flex-1 flex min-h-0">
-        {/* Sidebar */}
-        <aside className="w-56 shrink-0 border-r border-gray-800 p-2 overflow-y-auto">
-          <h2 className="text-sm font-semibold mb-2 text-gray-300 uppercase tracking-wide">
-            Peers
-          </h2>
-          <PeerList peers={peers} selected={selectedPeer} onSelect={setSelectedPeer} />
+      <div className="flex flex-1 min-h-0">
+        <aside className="w-64 border-r border-neutral-800 overflow-y-auto p-2">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wide">
+              Peers
+            </h2>
+            <button
+              className="text-xs text-blue-400 hover:text-blue-300 underline"
+              onClick={refreshPeers}
+            >
+              Refresh
+            </button>
+          </div>
+          <PeerList
+            peers={peers}
+            selected={selectedPeer}
+            onSelect={setSelectedPeer}
+            selfId={myPub}
+            selfAlias={identity?.alias ?? ''}
+          />
         </aside>
 
-        {/* Chat */}
-        <section className="flex-1 flex flex-col min-w-0">
-          <div className="flex-1 overflow-y-auto">
-            {selectedPeer ? (
-              <ChatView blockchain={blockchain} myPubkeyB64={myPub} peerFilter={selectedPeer} />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-500">
-                Select a peer to start chatting.
-              </div>
-            )}
+        <section className="flex flex-col flex-1 min-h-0">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-800 bg-neutral-900">
+            <div className="text-sm text-neutral-400">
+              {selectedPeer
+                ? `Chat with ${peerAlias(peers, selectedPeer) ?? '(unknown peer)'}`
+                : 'Select a peer to chat'}
+            </div>
+            <button
+              className="text-xs text-blue-400 hover:text-blue-300 underline"
+              onClick={() => setShowAliasModal(true)}
+            >
+              Rename
+            </button>
           </div>
-          {/* Input */}
-          <form onSubmit={send} className="p-2 border-t border-gray-800 flex gap-2">
+
+          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+            <ChatView
+              blockchain={blockchain}
+              myPubkeyB64={myPub}
+              peerFilter={selectedPeer}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 p-3 border-t border-neutral-800 bg-neutral-900">
             <input
               type="text"
-              className="flex-1 px-3 py-2 rounded-md bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder={selectedPeer ? 'Type message…' : 'Select a peer to enable chat…'}
+              className="flex-1 rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder={
+                selectedPeer ? 'Type a message…' : 'Select a peer to enable chat'
+              }
               value={text}
               onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
               disabled={sending || !selectedPeer}
             />
             <button
-              type="submit"
-              disabled={sending || !text.trim() || !selectedPeer}
-              className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium"
+              className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500"
+              onClick={send}
+              disabled={sending || !selectedPeer || !text.trim()}
             >
               Send
             </button>
-          </form>
+          </div>
         </section>
       </div>
-
-      {showAliasModal && (
-        <AliasModal initial={identity?.alias ?? ''} onSubmit={applyAlias} />
-      )}
     </div>
   );
+}
+
+function peerAlias(peers: PeerInfo[], id: string): string | undefined {
+  return peers.find((p) => p.id === id)?.alias;
 }

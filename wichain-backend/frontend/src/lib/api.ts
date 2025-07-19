@@ -40,33 +40,8 @@ function parseJson<T>(v: unknown): T | null {
   }
 }
 
-interface RawBackendBlock {
-  index?: number;
-  timestamp_ms?: number;
-  previous_hash?: string;
-  nonce?: number;
-  hash?: string;
-  data?: string;
-  raw_data?: string;
-  payload?: unknown;
-}
-
-function normalizeBlock(b: RawBackendBlock): Block {
-  return {
-    index: Number(b.index ?? 0),
-    timestamp_ms: Number(b.timestamp_ms ?? 0),
-    previous_hash: String(b.previous_hash ?? ''),
-    nonce: Number(b.nonce ?? 0),
-    hash: String(b.hash ?? ''),
-    raw_data:
-      typeof b.raw_data === 'string'
-        ? b.raw_data
-        : typeof b.data === 'string'
-        ? b.data
-        : undefined,
-    data: typeof b.data === 'string' ? b.data : undefined,
-    payload: b.payload,
-  };
+interface ParsedBlockchain {
+  chain: Block[];
 }
 
 /* ---------- API Calls ---------- */
@@ -75,36 +50,29 @@ export async function apiGetIdentity(): Promise<Identity> {
 }
 
 export async function apiSetAlias(alias: string): Promise<void> {
-  await invoke('set_alias', { new_alias: alias });
+  await invoke('set_alias', { newAlias: alias });
 }
 
 export async function apiGetPeers(): Promise<PeerInfo[]> {
-  const peers = await invoke<PeerInfo[]>('get_peers');
-  return peers ?? [];
-}
-
-interface ParsedBlockchainResponse {
-  chain: RawBackendBlock[];
+  return invoke<PeerInfo[]>('get_peers');
 }
 
 export async function apiGetBlockchain(): Promise<Blockchain> {
   const json = await invoke<string>('get_blockchain_json');
-  const parsed = parseJson<ParsedBlockchainResponse>(json);
+  const parsed = parseJson<ParsedBlockchain>(json);
   if (!parsed || !Array.isArray(parsed.chain)) {
     return { chain: [] };
   }
-  return {
-    chain: parsed.chain.map(normalizeBlock),
-  };
+  return parsed;
 }
 
-/** Direct message (peer required). */
-export async function apiAddMessage(text: string, toPeerId: string): Promise<boolean> {
+/* Direct peer message (required) */
+export async function apiSendMessage(toPeerId: string, text: string): Promise<boolean> {
   try {
-    await invoke<string>('add_text_message', { content: text, to_peer: toPeerId });
+    await invoke('send_text_message', { content: text, toPeer: toPeerId });
     return true;
   } catch (err) {
-    console.error('add_text_message failed', err);
+    console.error('send_text_message failed', err);
     return false;
   }
 }
