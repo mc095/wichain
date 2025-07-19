@@ -430,9 +430,33 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatP
 /// Reset data: delete blockchain + identity from disk. Advise UI to restart.
 #[tauri::command]
 async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // Remove files
     let _ = fs::remove_file(&state.blockchain_path);
     let _ = fs::remove_file(&state.identity_path);
-    warn!("Local WiChain data deleted; please restart app.");
-    let _ = state.app.emit("reset_done", ());
+
+    // Reset blockchain in memory
+    {
+        let mut chain = state.blockchain.lock().await;
+        *chain = Blockchain::new();
+        if let Err(e) = chain.save_to_file(&state.blockchain_path) {
+            warn!("Failed to save new blockchain: {e}");
+        }
+    }
+
+    // Generate a new identity
+    let new_id = regenerate_identity(&state.identity_path);
+    let _new_signing_key = decode_signing_key(&new_id)
+        .map_err(|e| format!("failed to decode new key: {e}"))?;
+    {
+        let mut id = state.identity.lock().await;
+        *id = new_id.clone();
+    }
+
+    // Update node alias + identity (no restart needed)
+    state.node.set_alias(new_id.alias.clone()).await;
+
+    warn!("Local WiChain data reset live (new alias: {}).", new_id.alias);
+    let _ = state.app.emit("reset_done", new_id);
     Ok(())
 }
+

@@ -17,8 +17,7 @@ import { ChatView } from './components/ChatView';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
-// Fix: Use getCurrentWindow for Tauri v2
-import { getCurrentWindow } from '@tauri-apps/api/window'; // <-- THIS IS THE CRUCIAL CHANGE
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export default function App() {
   /* ---------------- Identity ---------------- */
@@ -76,6 +75,18 @@ export default function App() {
     };
   }, [refreshChain]);
 
+  // Listen for reset_done event and refresh identity/blockchain
+  useEffect(() => {
+    const unlisten = listen('reset_done', async () => {
+      const newId = await apiGetIdentity();
+      setIdentity(newId);
+      const newChain = await apiGetBlockchain();
+      setBlockchain(newChain);
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, []); // Empty dependency array as it only needs to set up the listener once
+
+
   /* ---------------- Selected peer ---------------- */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
@@ -101,8 +112,8 @@ export default function App() {
     const ok = await apiResetData();
     if (ok) {
       // reload the app; new identity will be generated
-      const current = getCurrentWindow(); // <-- CALL THE FUNCTION
-      await current.hide();             // <-- USE THE RETURNED OBJECT
+      const current = getCurrentWindow();
+      await current.hide();
       window.location.reload();
     }
   }
