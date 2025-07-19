@@ -111,25 +111,29 @@ export default function App() {
   );
 
   /* Alias Rename Flow */
-  const needsAlias =
-    identity?.alias?.startsWith('Anon-') ||
-    !identity?.alias ||
-    identity?.alias.trim() === '';
-  const [showAliasModal, setShowAliasModal] = useState(false);
-  useEffect(() => {
-    if (needsAlias) setShowAliasModal(true);
-  }, [needsAlias]);
+const [showAliasModal, setShowAliasModal] = useState(false);
 
-  const applyAlias = useCallback(
-    async (alias: string) => {
-      await apiSetAlias(alias);
-      const updated = await apiGetIdentity();
-      setIdentity(updated);
-      setShowAliasModal(false);
-      refreshPeers();
-    },
-    [refreshPeers]
-  );
+// Open modal only on first load if alias is empty/Anon
+useEffect(() => {
+  if (
+    identity &&
+    (identity.alias.startsWith('Anon-') || !identity.alias.trim())
+  ) {
+    setShowAliasModal(true);
+  }
+}, [identity]);
+
+const applyAlias = useCallback(
+  async (alias: string) => {
+    await apiSetAlias(alias);
+    const updated = await apiGetIdentity();
+    setIdentity(updated);
+    setShowAliasModal(false); // close immediately
+    refreshPeers();
+  },
+  [refreshPeers]
+);
+
 
   const myPub = identity?.public_key_b64 ?? '';
 
