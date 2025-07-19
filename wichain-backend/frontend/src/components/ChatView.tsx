@@ -1,11 +1,11 @@
 // frontend/src/components/ChatView.tsx
 import React, { useMemo, useRef, useEffect } from 'react';
-import type { Blockchain, SignedMessage, Block } from '../lib/api'; // Ensure Block is imported
+import type { Blockchain, Block } from '../lib/api';
 
 interface Props {
   blockchain: Blockchain;
   myPubkeyB64?: string;
-  peerFilter?: string | null;
+  peerFilter: string; // required (we only render when peer selected)
 }
 
 interface ChatItem {
@@ -17,7 +17,15 @@ interface ChatItem {
   mine: boolean;
 }
 
-/* Inline peer tag format: @peer:<id>:::<text> */
+/* Canonical payload */
+interface CanonPayload {
+  from?: string;
+  to?: string | null;
+  text?: string;
+  ts?: number;
+}
+
+/* legacy inline tag: @peer:<id>:::<text> */
 function parseTaggedText(s: string): { to?: string; text: string } {
   const tag = '@peer:';
   if (s.startsWith(tag)) {
@@ -33,62 +41,42 @@ function parseTaggedText(s: string): { to?: string; text: string } {
   return { text: s };
 }
 
-// Define specific types for the JSON payloads if not already in api.ts
-// This helps eliminate 'any' and provides better type safety.
-// Adjust these if you have more precise types defined elsewhere.
-interface TextMessagePayload {
-    Text: string;
+function tryParseJson(s: string | undefined): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
 }
 
-interface MessagesContainerPayload {
-    Messages: SignedMessage[];
-}
-
-// Type Guards to safely check payload structures
-function isTextMessagePayload(payload: unknown): payload is TextMessagePayload {
-    return typeof payload === 'object' && payload !== null && 'Text' in payload && typeof (payload as TextMessagePayload).Text === 'string';
-}
-
-function isMessagesContainerPayload(payload: unknown): payload is MessagesContainerPayload {
-    return typeof payload === 'object' && payload !== null && 'Messages' in payload && Array.isArray((payload as MessagesContainerPayload).Messages);
-}
-
-function extractFromBlock(
-  b: Block, // 'b' is now typed as Block, which is good!
-  myPub?: string,
-  filter?: string | null
-): ChatItem[] {
+function itemsFromBlock(b: Block, myPub: string | undefined, peer: string): ChatItem[] {
   const items: ChatItem[] = [];
-  // Use optional chaining or direct access if 'timestamp_ms' is guaranteed on Block
-  const ts = b.timestamp_ms ?? 0; // Removed (b as any), relying on Block type
+  const ts = b.timestamp_ms ?? 0;
 
-  // ----- Source A: legacy `data` field -----
+  // legacy data
   if (typeof b.data === 'string') {
     const tagged = parseTaggedText(b.data);
-    if (filter && tagged.to !== filter) return items;
+    // we only show if the peer matches the legacy tag
+    if (tagged.to !== peer) return items;
     items.push({
       key: `${b.index}:data`,
       from: b.hash.slice(0, 8),
       to: tagged.to,
       text: tagged.text,
       ts,
-      mine: false, // can't know sender
+      mine: false,
     });
     return items;
   }
 
-  // ----- Source B: raw_data JSON value -----
-  let payload: unknown; // Keep as unknown initially
-  try {
-    payload = JSON.parse(b.raw_data ?? 'null');
-  } catch {
-    payload = b.raw_data; // Fallback: if parse fails, keep raw_data as is (could be string)
-  }
+  // canonical / raw JSON
+  const raw = b.raw_data ?? b.data ?? '';
+  const payload = tryParseJson(raw);
 
-  // string
   if (typeof payload === 'string') {
     const tagged = parseTaggedText(payload);
-    if (filter && tagged.to !== filter) return items;
+    if (tagged.to !== peer) return items;
     items.push({
       key: `${b.index}:rawstr`,
       from: b.hash.slice(0, 8),
@@ -100,62 +88,29 @@ function extractFromBlock(
     return items;
   }
 
-  // enum { Text: "..." }
-  // Use the type guard here to narrow the type of 'payload'
-  if (isTextMessagePayload(payload)) {
-    const txt = payload.Text; // 'payload' is now safely 'TextMessagePayload'
-    const tagged = parseTaggedText(txt);
-    if (filter && tagged.to !== filter) return items;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const p = payload as CanonPayload;
+    const from = p.from ?? b.hash.slice(0, 8);
+    const to = p.to ?? null;
+    if (to !== peer && from !== peer) return items; // show only peer‑relevant
     items.push({
-      key: `${b.index}:TextEnum`,
-      from: b.hash.slice(0, 8),
-      to: tagged.to,
-      text: tagged.text,
-      ts,
-      mine: false,
+      key: `${b.index}:canon`,
+      from,
+      to,
+      text: p.text ?? '',
+      ts: typeof p.ts === 'number' ? p.ts : ts,
+      mine: !!myPub && from === myPub,
     });
     return items;
   }
 
-  // enum { Messages: [...] }
-  // Use the type guard here to narrow the type of 'payload'
-  if (isMessagesContainerPayload(payload)) {
-    const msgs = payload.Messages; // 'payload' is now safely 'MessagesContainerPayload'
-    for (const m of msgs) {
-      if (filter && m.from !== filter && m.to !== filter) continue;
-      items.push({
-        key: `${b.index}:${m.id}`,
-        from: m.from,
-        to: m.to ?? undefined,
-        text: m.content,
-        ts: m.timestamp_ms ?? ts,
-        mine: !!myPub && m.from === myPub,
-      });
-    }
-    return items;
-  }
-
-  // fallback: show raw if no peer filter
-  if (!filter) {
-    items.push({
-      key: `${b.index}:fallback`,
-      from: b.hash.slice(0, 8),
-      text: JSON.stringify(payload),
-      ts,
-      mine: false,
-    });
-  }
   return items;
 }
 
-function extractChatItems(
-  bc: Blockchain,
-  myPub?: string,
-  filter?: string | null
-): ChatItem[] {
+function extractChatItems(bc: Blockchain, myPub: string | undefined, peer: string): ChatItem[] {
   const list: ChatItem[] = [];
   for (const b of bc.chain) {
-    list.push(...extractFromBlock(b, myPub, filter));
+    list.push(...itemsFromBlock(b, myPub, peer));
   }
   list.sort((a, b) => a.ts - b.ts);
   return list;
@@ -173,19 +128,27 @@ export const ChatView: React.FC<Props> = ({ blockchain, myPubkeyB64, peerFilter 
   }, [chatItems.length]);
 
   return (
-    <div className="chat-view">
+    <div className="p-4 space-y-2">
       {chatItems.map((c) => (
         <div
           key={c.key}
-          className={`chat-msg ${c.mine ? 'mine' : 'theirs'}`}
+          className={`flex ${c.mine ? 'justify-end' : 'justify-start'}`}
           title={new Date(c.ts).toLocaleString()}
         >
           {!c.mine && (
-            <div className="chat-from">
-              {c.from.slice(0, 10)}…{c.to ? `→${c.to.slice(0, 6)}…` : ''}
+            <div className="mr-2 text-[10px] text-gray-500 self-end max-w-[8rem] truncate">
+              {c.from.slice(0, 10)}{c.to ? `→${c.to.slice(0, 6)}…` : ''}
             </div>
           )}
-          <div className="chat-bubble">{c.text}</div>
+          <div
+            className={`px-3 py-2 rounded-lg max-w-[75%] break-words text-sm ${
+              c.mine
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-800 text-gray-100'
+            }`}
+          >
+            {c.text}
+          </div>
         </div>
       ))}
       <div ref={endRef} />

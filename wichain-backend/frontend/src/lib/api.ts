@@ -24,10 +24,9 @@ export interface Block {
   previous_hash: string;
   nonce: number;
   hash: string;
-  // Runtime backend may provide either `data` (legacy) or `raw_data` (new).
   data?: string;
   raw_data?: string;
-  payload?: unknown; // Keep as unknown if its structure is highly variable
+  payload?: unknown;
 }
 
 export interface Blockchain {
@@ -38,7 +37,6 @@ export interface Identity {
   alias: string;
   private_key_b64: string;
   public_key_b64: string;
-  public_key?: string;
 }
 
 /* ---------- Helpers ---------- */
@@ -51,8 +49,6 @@ function parseJson<T>(v: unknown): T | null {
   }
 }
 
-// Define the expected raw structure for a block coming from the backend
-// This helps type 'b' without using 'any'
 interface RawBackendBlock {
   index?: number;
   timestamp_ms?: number;
@@ -64,22 +60,19 @@ interface RawBackendBlock {
   payload?: unknown;
 }
 
-/**
- * Normalize a raw block (from backend JSON) into a Block the UI can use.
- * Guarantees `raw_data` is set (falls back to `data` or `""`).
- */
-function normalizeBlock(b: RawBackendBlock): Block { // Changed 'any' to 'RawBackendBlock'
+function normalizeBlock(b: RawBackendBlock): Block {
   return {
     index: Number(b.index ?? 0),
     timestamp_ms: Number(b.timestamp_ms ?? 0),
     previous_hash: String(b.previous_hash ?? ''),
     nonce: Number(b.nonce ?? 0),
     hash: String(b.hash ?? ''),
-    raw_data: typeof b.raw_data === 'string'
-      ? b.raw_data
-      : typeof b.data === 'string'
-      ? JSON.stringify(b.data) // wrap legacy plain string as JSON string
-      : 'null', // Changed from '' to 'null' for consistency with JSON.parse fallback
+    raw_data:
+      typeof b.raw_data === 'string'
+        ? b.raw_data
+        : typeof b.data === 'string'
+        ? b.data
+        : undefined,
     data: typeof b.data === 'string' ? b.data : undefined,
     payload: b.payload,
   };
@@ -90,19 +83,22 @@ export async function apiGetIdentity(): Promise<Identity> {
   return invoke<Identity>('get_identity');
 }
 
+export async function apiSetAlias(alias: string): Promise<void> {
+  await invoke('set_alias', { newAlias: alias });
+}
+
 export async function apiGetPeers(): Promise<PeerInfo[]> {
   const peers = await invoke<PeerInfo[]>('get_peers');
   return peers ?? [];
 }
 
-// Define the expected structure for the parsed blockchain JSON
 interface ParsedBlockchainResponse {
-    chain: RawBackendBlock[]; // Expect an array of raw blocks for mapping
+  chain: RawBackendBlock[];
 }
 
 export async function apiGetBlockchain(): Promise<Blockchain> {
-  const json = await invoke<string>('get_blockchain_json'); // backend returns string
-  const parsed = parseJson<ParsedBlockchainResponse>(json); // Changed 'any' to 'ParsedBlockchainResponse'
+  const json = await invoke<string>('get_blockchain_json');
+  const parsed = parseJson<ParsedBlockchainResponse>(json);
   if (!parsed || !Array.isArray(parsed.chain)) {
     return { chain: [] };
   }
@@ -111,16 +107,10 @@ export async function apiGetBlockchain(): Promise<Blockchain> {
   };
 }
 
-/**
- * Broadcast a text message. If `toPeerId` supplied, encode a tag so
- * filtering works in ChatView: "@peer:<id>:::<text>"
- */
-export async function apiAddMessage(text: string, toPeerId?: string | null): Promise<boolean> {
+/** Direct message (peer required). */
+export async function apiAddMessage(text: string, toPeerId: string): Promise<boolean> {
   try {
-    await invoke<string>('add_text_message', {
-      content: text,
-      toPeer: toPeerId ?? null,
-    });
+    await invoke<string>('add_text_message', { content: text, toPeer: toPeerId });
     return true;
   } catch (err) {
     console.error('add_text_message failed', err);
