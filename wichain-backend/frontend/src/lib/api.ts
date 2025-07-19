@@ -9,48 +9,157 @@ export interface PeerInfo {
   last_seen_ms?: number;
 }
 
+export interface SignedMessage {
+  id: string;
+  from: string;
+  to?: string | null;
+  timestamp_ms: number;
+  content: string;
+  sig: string;
+}
+
+export interface Block {
+  index: number;
+  timestamp_ms: number;
+  previous_hash: string;
+  nonce: number;
+  hash: string;
+  data?: string;
+  raw_data?: string;
+  payload?: unknown;
+}
+
+export interface Blockchain {
+  chain: Block[];
+}
+
 export interface Identity {
   alias: string;
   private_key_b64: string;
   public_key_b64: string;
 }
 
-export interface ChatPayload {
-  from: string;
-  to: string | null;
-  text: string;
-  ts_ms: number;
+/* ---------- Helpers ---------- */
+function parseJson<T>(v: unknown): T | null {
+  if (typeof v !== 'string') return null;
+  try {
+    return JSON.parse(v) as T;
+  } catch {
+    return null;
+  }
 }
 
-/* ---------- Identity ---------- */
+// raw back-end block
+interface RawBackendBlock {
+  index?: number;
+  timestamp_ms?: number;
+  previous_hash?: string;
+  nonce?: number;
+  hash?: string;
+  data?: string;
+  raw_data?: string;
+  payload?: unknown;
+}
+
+/** normalize block into something UI-safe */
+function normalizeBlock(b: RawBackendBlock): Block {
+  return {
+    index: Number(b.index ?? 0),
+    timestamp_ms: Number(b.timestamp_ms ?? 0),
+    previous_hash: String(b.previous_hash ?? ''),
+    nonce: Number(b.nonce ?? 0),
+    hash: String(b.hash ?? ''),
+    raw_data:
+      typeof b.raw_data === 'string'
+        ? b.raw_data
+        : typeof b.data === 'string'
+        ? b.data
+        : '',
+    data: typeof b.data === 'string' ? b.data : undefined,
+    payload: b.payload,
+  };
+}
+
+/* ---------- API Calls ---------- */
 export async function apiGetIdentity(): Promise<Identity> {
   return invoke<Identity>('get_identity');
 }
 
-export async function apiSetAlias(alias: string): Promise<void> {
-  await invoke('set_alias', { newAlias: alias });
+export async function apiSetAlias(newAlias: string): Promise<boolean> {
+  try {
+    await invoke('set_alias', { newAlias });
+    return true;
+  } catch (err) {
+    console.error('set_alias failed', err);
+    return false;
+  }
 }
 
-/* ---------- Peers ---------- */
 export async function apiGetPeers(): Promise<PeerInfo[]> {
   const peers = await invoke<PeerInfo[]>('get_peers');
   return peers ?? [];
 }
 
-/* ---------- Chat ---------- */
-export async function apiGetChatHistory(): Promise<ChatPayload[]> {
-  return invoke<ChatPayload[]>('get_chat_history');
+// parsed blockchain
+interface ParsedBlockchainResponse {
+  chain: RawBackendBlock[];
 }
 
+export async function apiGetBlockchain(): Promise<Blockchain> {
+  let json: unknown; // Changed 'string' to 'unknown' to avoid 'as any' directly on invoke
+  try {
+    // Rely on invoke's generic type for return value, not for argument
+    json = await invoke<string>('get_chat_history_json');
+  } catch {
+    json = await invoke<string>('get_blockchain_json');
+  }
+  
+  // Now, safely assert json is a string before parsing
+  const parsed = parseJson<ParsedBlockchainResponse>(json as string); 
+  
+  if (!parsed || !Array.isArray(parsed.chain)) {
+    return { chain: [] };
+  }
+  return {
+    chain: parsed.chain.map(normalizeBlock),
+  };
+}
+
+/** Send chat message. If `toPeerId` omitted => group/all. */
 export async function apiAddMessage(
   text: string,
   toPeerId?: string | null
 ): Promise<boolean> {
-  await invoke('add_chat_message', { content: text, toPeer: toPeerId });
-  return true;
+  try {
+    await invoke('add_chat_message', {
+      content: text,
+      toPeer: toPeerId ?? null,
+    });
+    return true;
+  } catch (err) {
+    console.error('add_chat_message failed', err);
+    return false;
+  }
 }
 
-/* ---------- Reset ---------- */
-export async function apiResetData(): Promise<void> {
-  await invoke('reset_data');
+export async function apiResetData(): Promise<boolean> {
+  try {
+    await invoke('reset_data');
+    return true;
+  } catch (err) {
+    console.error('reset_data failed', err);
+    return false;
+  }
 }
+
+// Note: Removed apiPingDiscover as it was not in the original App.tsx's api imports
+// If you need it, add it back and ensure your backend has the corresponding command.
+// export async function apiPingDiscover(): Promise<boolean> {
+//   try {
+//     await invoke('ping_discover');
+//     return true;
+//   } catch (err) {
+//     console.error('ping_discover failed', err);
+//     return false;
+//   }
+// }

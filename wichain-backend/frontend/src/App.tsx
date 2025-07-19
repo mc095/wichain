@@ -1,64 +1,58 @@
 // frontend/src/App.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import './App.css';
 import {
   apiGetIdentity,
-  apiSetAlias,
   apiGetPeers,
+  apiGetBlockchain,
   apiAddMessage,
-  apiGetChatHistory,
+  apiSetAlias,
   apiResetData,
   type Identity,
   type PeerInfo,
-  type ChatPayload,
+  type Blockchain,
 } from './lib/api';
-
-import { listen } from '@tauri-apps/api/event';
-
-import { HeaderBar } from './components/HeaderBar';
-import { OnboardingWizard } from './components/OnboardingWizard';
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
-
-import './index.css'; // tailwind base + overrides
-import './App.css';   // minimal extras
+import { Onboarding } from './components/Onboarding';
+import { ResetConfirm } from './components/ResetConfirm';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window'; // CORRECTED: Changed currentWindow to getCurrentWindow
 
 export default function App() {
-  // ---------------------------------------------------------------------------
-  // State
-  // ---------------------------------------------------------------------------
+  /* ---------------- Identity ---------------- */
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const [onboarding, setOnboarding] = useState(false);
+
+  const loadIdentity = useCallback(async () => {
+    const id = await apiGetIdentity();
+    setIdentity(id);
+    if (id.alias.startsWith('Anon-')) {
+      // first run; show onboarding wizard
+      setOnboarding(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadIdentity();
+  }, [loadIdentity]);
+
+  // React to alias changes from backend
+  useEffect(() => {
+    const un = listen('alias_update', loadIdentity);
+    return () => {
+      un.then((f) => f());
+    };
+  }, [loadIdentity]);
+
+  /* ---------------- Peers ---------------- */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
-  const [chat, setChat] = useState<ChatPayload[]>([]);
-  const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
-  const [showOnboarding, setShowOnboarding] = useState(false);
-  const [aliasEditOpen, setAliasEditOpen] = useState(false);
-
-  // ---------------------------------------------------------------------------
-  // Initial load
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    (async () => {
-      const id = await apiGetIdentity();
-      setIdentity(id);
-      if (!id.alias || id.alias.startsWith('Anon-')) {
-        setShowOnboarding(true);
-      }
-    })();
+  const refreshPeers = useCallback(() => {
+    apiGetPeers().then(setPeers).catch(console.error);
   }, []);
-
-  // ---------------------------------------------------------------------------
-  // Peer refresh & subscriptions
-  // ---------------------------------------------------------------------------
-  const refreshPeers = useCallback(async () => {
-    const p = await apiGetPeers();
-    setPeers(p);
-  }, []);
-
   useEffect(() => {
-    refreshPeers(); // initial
-    const unlistenPromise = listen('peer_update', () => {
-      refreshPeers();
-    });
+    refreshPeers();
+    const unlistenPromise = listen('peer_update', refreshPeers);
     const interval = setInterval(refreshPeers, 5_000);
     return () => {
       clearInterval(interval);
@@ -66,60 +60,25 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  // ---------------------------------------------------------------------------
-  // Chat refresh & subscriptions
-  // ---------------------------------------------------------------------------
-  const refreshChat = useCallback(async () => {
-    const msgs = await apiGetChatHistory();
-    setChat(msgs);
+  /* ---------------- Blockchain / Chat ---------------- */
+  const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
+  const refreshChain = useCallback(() => {
+    apiGetBlockchain().then(setBlockchain).catch(console.error);
   }, []);
-
   useEffect(() => {
-    refreshChat();
-    const unlistenPromise = listen('chat_update', () => {
-      refreshChat();
-    });
-    const interval = setInterval(refreshChat, 10_000);
+    refreshChain();
+    const unlistenPromise = listen('chat_update', refreshChain);
+    const interval = setInterval(refreshChain, 10_000);
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
     };
-  }, [refreshChat]);
+  }, [refreshChain]);
 
-  // Alias changed on backend (after set_alias or reset)
-  useEffect(() => {
-    const unlistenPromise = listen('alias_update', async () => {
-      const id = await apiGetIdentity();
-      setIdentity(id);
-    });
-    return () => {
-      unlistenPromise.then((un) => un());
-    };
-  }, []);
+  /* ---------------- Selected peer ---------------- */
+  const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
-  // Reset done -> reload identity & chat, then show onboarding again
-  useEffect(() => {
-    const unlistenPromise = listen('reset_done', async () => {
-      const id = await apiGetIdentity();
-      setIdentity(id);
-      setChat([]);
-      setPeers([]);
-      setShowOnboarding(true);
-    });
-    return () => {
-      unlistenPromise.then((un) => un());
-    };
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // Derived: current alias & my id
-  // ---------------------------------------------------------------------------
-  const myPub = identity?.public_key_b64 ?? '';
-  const myAlias = identity?.alias ?? '(unknown)';
-
-  // ---------------------------------------------------------------------------
-  // Send message
-  // ---------------------------------------------------------------------------
+  /* ---------------- Compose / Send ---------------- */
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
@@ -130,108 +89,80 @@ export default function App() {
     setSending(false);
     if (ok) {
       setText('');
-      refreshChat(); // optimistic
+      refreshChain();
     }
-  }, [text, selectedPeer, refreshChat]);
+  }, [text, selectedPeer, refreshChain]);
 
-  // ---------------------------------------------------------------------------
-  // Apply alias (used from onboarding & header rename)
-  // ---------------------------------------------------------------------------
-  const applyAlias = useCallback(
-    async (alias: string) => {
-      await apiSetAlias(alias);
-      const id = await apiGetIdentity();
-      setIdentity(id);
-      setAliasEditOpen(false);
-      setShowOnboarding(false);
-    },
-    []
-  );
-
-  // ---------------------------------------------------------------------------
-  // Reset data (header menu)
-  // ---------------------------------------------------------------------------
-  const doReset = useCallback(async () => {
-    if (!confirm('This will delete your local identity and chat history. Continue?')) {
-      return;
+  /* ---------------- Reset data ---------------- */
+  const [resetOpen, setResetOpen] = useState(false);
+  async function doReset() {
+    setResetOpen(false);
+    const ok = await apiResetData();
+    if (ok) {
+      // reload the app; new identity will be generated
+      const current = getCurrentWindow(); // CORRECTED: Call getCurrentWindow()
+      await current.hide();              // Then use the returned window object
+      window.location.reload();
     }
-    await apiResetData();
-    const id = await apiGetIdentity();
-    setIdentity(id);
-    setChat([]);
-    setPeers([]);
-    setSelectedPeer(null);
-    setShowOnboarding(true);
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // Filter chat for current view
-  // ---------------------------------------------------------------------------
-  const filteredChat = useMemo(() => {
-    if (!selectedPeer) return chat; // group view
-    return chat.filter(
-      (m) =>
-        (m.to === selectedPeer && m.from === myPub) ||
-        (m.from === selectedPeer && (m.to === myPub || m.to === null)),
-    );
-  }, [chat, selectedPeer, myPub]);
-  
-  const displayedPeers = peers.filter((p) => p.id !== myPub);
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
-  if (showOnboarding && identity) {
-    return (
-      <OnboardingWizard
-        initialAlias={identity.alias}
-        onAliasSave={applyAlias}
-        onDone={() => setShowOnboarding(false)}
-        onDiscoverPeers={refreshPeers}
-      />
-    );
   }
 
+  /* ---------------- Onboarding -> save alias ---------------- */
+  async function onboardingDone(alias: string) {
+    await apiSetAlias(alias);
+    setOnboarding(false);
+    loadIdentity();
+  }
+
+  const myPub = identity?.public_key_b64 ?? '';
+  const myAlias = identity?.alias ?? '(unknown)';
+
+  // Filter out the current user from the peers list before passing to PeerList
+  const displayedPeers = peers.filter((p) => p.id !== myPub);
+
   return (
-    <div className="h-full w-full flex flex-col bg-zinc-950 text-zinc-100">
-      <HeaderBar
-        alias={myAlias}
-        myId={myPub}
-        onRename={() => setAliasEditOpen(true)}
-        onReset={doReset}
-      />
+    <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-bold text-emerald-400">WiChain</h1>
+          <span className="text-xs text-neutral-400">
+            {myAlias} · {myPub.slice(0, 10)}…
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+            onClick={() => setResetOpen(true)}
+          >
+            Reset Data
+          </button>
+        </div>
+      </header>
 
-      {/* rename inline modal */}
-      {aliasEditOpen && identity && (
-        <OnboardingWizard
-          initialAlias={identity.alias}
-          soloRenameMode
-          onAliasSave={applyAlias}
-          onDone={() => setAliasEditOpen(false)}
-          onDiscoverPeers={() => {}}
-        />
-      )}
-
-      <div className="flex-1 flex overflow-hidden">
-        <aside className="w-64 border-r border-zinc-800 overflow-y-auto p-2">
-          
-          <PeerList peers={displayedPeers} selected={selectedPeer} onSelect={setSelectedPeer} />
+      {/* Main */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-48 border-r border-neutral-800 p-2">
+          <PeerList
+            peers={displayedPeers} // Pass the filtered peers list
+            selected={selectedPeer}
+            onSelect={setSelectedPeer}
+          />
         </aside>
 
-        <main className="flex-1 flex flex-col">
-          <div className="flex-1 overflow-y-auto">
-            <ChatView
-              chat={filteredChat}
-              myId={myPub}
-              peerFilter={selectedPeer}
-            />
-          </div>
-
-          <div className="p-2 border-t border-zinc-800 flex gap-2">
+        {/* Chat */}
+        <section className="flex flex-1 flex-col">
+          <ChatView
+            blockchain={blockchain}
+            myPubkeyB64={myPub}
+            peerFilter={selectedPeer}
+          />
+          <div className="flex items-center gap-2 border-t border-neutral-800 p-2">
             <input
               type="text"
-              className="flex-1 rounded bg-zinc-800 text-zinc-100 px-3 py-2 outline-none focus:ring focus:ring-indigo-500/40"
-              placeholder={selectedPeer ? 'Message peer…' : 'Message everyone…'}
+              placeholder={
+                selectedPeer ? 'Message peer…' : 'Message everyone on LAN…'
+              }
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -241,17 +172,31 @@ export default function App() {
                 }
               }}
               disabled={sending}
+              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
             />
             <button
-              className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
-              disabled={sending || !text.trim()}
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
               onClick={send}
+              disabled={sending || !text.trim()}
             >
               Send
             </button>
           </div>
-        </main>
+        </section>
       </div>
+
+      {/* Overlays */}
+      {onboarding && identity && (
+        <Onboarding
+          initialAlias={identity.alias}
+          onDone={onboardingDone}
+        />
+      )}
+      <ResetConfirm
+        open={resetOpen}
+        onCancel={() => setResetOpen(false)}
+        onConfirm={doReset}
+      />
     </div>
   );
 }
