@@ -455,12 +455,21 @@ async fn handle_incoming_network_payload(
     }
 
     // 2. Legacy plaintext fallback -> wrap minimal body + no sig.
+        // 2. Legacy plaintext fallback or failed decryption.
+    let text_to_store = if payload_str.starts_with("E1:") {
+       "[Decryption failed]".to_string()
+  // Hide raw encrypted data
+    } else {
+        payload_str.to_string()            // Legacy plaintext
+    };
+
     let body = ChatBody {
         from: from_pub_b64.to_string(),
         to: Some(to_pub_b64.to_string()),
-        text: payload_str.to_string(),
+        text: text_to_store,
         ts_ms: now_ms(),
     };
+
     let chat = ChatSigned {
         body,
         sig_b64: String::new(),
@@ -615,15 +624,13 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
     for b in &chain.chain {
         if let Ok(signed) = serde_json::from_str::<ChatSigned>(&b.data) {
             out.push(signed.body);
-            continue;
-        }
-        if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
+        } else if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
             out.push(body);
-            continue;
         }
     }
     Ok(out)
 }
+
 
 /// Reset data: wipe state + generate new identity live.
 #[tauri::command]
