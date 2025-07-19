@@ -1,12 +1,21 @@
 // frontend/src/lib/api.ts
 import { invoke } from '@tauri-apps/api/core';
 
-/* ---------- Types ---------- */
+/* ------------------------------------------------------------------ */
+/* Types mirrored from backend                                        */
+/* ------------------------------------------------------------------ */
 export interface PeerInfo {
   id: string;
   alias: string;
   pubkey: string;
   last_seen_ms?: number;
+}
+
+export interface ChatPayloadV1 {
+  from: string;           // sender pubkey b64
+  to?: string | null;     // receiver pubkey b64; null => group/all
+  text: string;
+  ts_ms: number;          // unix ms
 }
 
 export interface SignedMessage {
@@ -18,14 +27,15 @@ export interface SignedMessage {
   sig: string;
 }
 
+/** Minimal block shape used by ChatView; NOT the on‑disk blockchain anymore. */
 export interface Block {
   index: number;
   timestamp_ms: number;
   previous_hash: string;
   nonce: number;
   hash: string;
-  data?: string;
-  raw_data?: string;
+  data?: string;     // JSON ChatPayloadV1 string
+  raw_data?: string; // legacy fallback
   payload?: unknown;
 }
 
@@ -39,47 +49,10 @@ export interface Identity {
   public_key_b64: string;
 }
 
-/* ---------- Helpers ---------- */
-function parseJson<T>(v: string): T | null {
-  try {
-    return JSON.parse(v) as T;
-  } catch {
-    return null;
-  }
-}
+/* ------------------------------------------------------------------ */
+/* API Calls                                                          */
+/* ------------------------------------------------------------------ */
 
-// raw back-end block
-interface RawBackendBlock {
-  index?: number;
-  timestamp_ms?: number;
-  previous_hash?: string;
-  nonce?: number;
-  hash?: string;
-  data?: string;
-  raw_data?: string;
-  payload?: unknown;
-}
-
-/** normalize block into something UI-safe */
-function normalizeBlock(b: RawBackendBlock): Block {
-  return {
-    index: Number(b.index ?? 0),
-    timestamp_ms: Number(b.timestamp_ms ?? 0),
-    previous_hash: String(b.previous_hash ?? ''),
-    nonce: Number(b.nonce ?? 0),
-    hash: String(b.hash ?? ''),
-    raw_data:
-      typeof b.raw_data === 'string'
-        ? b.raw_data
-        : typeof b.data === 'string'
-        ? b.data
-        : '',
-    data: typeof b.data === 'string' ? b.data : undefined,
-    payload: b.payload,
-  };
-}
-
-/* ---------- API Calls ---------- */
 export async function apiGetIdentity(): Promise<Identity> {
   return invoke<Identity>('get_identity');
 }
@@ -99,20 +72,26 @@ export async function apiGetPeers(): Promise<PeerInfo[]> {
   return peers ?? [];
 }
 
-// parsed blockchain
-interface ParsedBlockchainResponse {
-  chain: RawBackendBlock[];
-}
-
+/**
+ * Fetch chat history from backend and expose as a synthetic Blockchain.
+ * Each chat payload becomes one pseudo‑block; hashes are placeholder strings.
+ */
 export async function apiGetBlockchain(): Promise<Blockchain> {
-  const json = await invoke<string>('get_blockchain_json');
-  const parsed = parseJson<ParsedBlockchainResponse>(json);
-  if (!parsed || !Array.isArray(parsed.chain)) {
+  try {
+    const msgs = await invoke<ChatPayloadV1[]>('get_chat_history');
+    const chain: Block[] = msgs.map((msg, idx) => ({
+      index: idx,
+      timestamp_ms: msg.ts_ms ?? Date.now(),
+      previous_hash: idx === 0 ? '0' : String(idx - 1),
+      nonce: 0,
+      hash: String(idx),
+      data: JSON.stringify(msg),
+    }));
+    return { chain };
+  } catch (err) {
+    console.error('apiGetBlockchain failed', err);
     return { chain: [] };
   }
-  return {
-    chain: parsed.chain.map(normalizeBlock),
-  };
 }
 
 /** Send chat message. If `toPeerId` omitted => group/all. */

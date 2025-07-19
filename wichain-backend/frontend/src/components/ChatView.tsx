@@ -1,18 +1,11 @@
 // frontend/src/components/ChatView.tsx
 import { useMemo, useRef, useEffect } from 'react';
-import type { Blockchain, Block } from '../lib/api';
+import type { Blockchain, Block, ChatPayloadV1 } from '../lib/api';
 
 interface Props {
   blockchain: Blockchain;
   myPubkeyB64?: string;
   peerFilter?: string | null;
-}
-
-interface ChatPayloadV1 {
-  from: string;
-  to?: string | null;
-  text: string;
-  ts_ms: number;
 }
 
 interface ChatItem {
@@ -24,19 +17,28 @@ interface ChatItem {
   mine: boolean;
 }
 
-/** Try to parse ChatPayloadV1 from block data string. */
-function parsePayload(data: string): ChatPayloadV1 {
-  // First try canonical JSON
+/* ------------------------------------------------------------------ */
+/* Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Parse a block's string payload into ChatPayloadV1 (best effort). */
+function parsePayload(data: string, fallbackTs: number): ChatPayloadV1 {
+  // Preferred: JSON ChatPayloadV1
   try {
-    const p = JSON.parse(data) as ChatPayloadV1;
-    if (typeof p.text === 'string' && typeof p.from === 'string') {
-      return p;
+    const p = JSON.parse(data) as Partial<ChatPayloadV1>;
+    if (p && typeof p.text === 'string' && typeof p.from === 'string') {
+      return {
+        from: p.from,
+        to: p.to ?? null,
+        text: p.text,
+        ts_ms: p.ts_ms ?? fallbackTs,
+      };
     }
   } catch {
     /* ignore */
   }
 
-  // legacy inline tag: @peer:<id>:::<text>
+  // Legacy inline tag: @peer:<id>:::<text>
   const tag = '@peer:';
   if (data.startsWith(tag)) {
     const rest = data.slice(tag.length);
@@ -46,21 +48,21 @@ function parsePayload(data: string): ChatPayloadV1 {
         from: 'unknown',
         to: rest.slice(0, sep),
         text: rest.slice(sep + 3),
-        ts_ms: Date.now(),
+        ts_ms: fallbackTs,
       };
     }
   }
 
-  // plain broadcast text fallback
+  // Plain broadcast text fallback
   return {
     from: 'unknown',
     to: null,
     text: data,
-    ts_ms: Date.now(),
+    ts_ms: fallbackTs,
   };
 }
 
-/** Convert a Block to 0‑or‑1 ChatItems (newer chains store exactly one payload per block). */
+/** Pull chat items out of one pseudo‑block. */
 function itemsFromBlock(
   b: Block,
   myPub?: string,
@@ -68,41 +70,28 @@ function itemsFromBlock(
 ): ChatItem[] {
   const out: ChatItem[] = [];
   const ts = b.timestamp_ms ?? 0;
-  const effectiveData = b.data ?? b.raw_data ?? '';
-  const payload = parsePayload(effectiveData);
+  const raw = b.data ?? b.raw_data ?? '';
+  if (!raw) return out;
 
-  // Conversation filtering:
-  // - If no filter: include everything (group view).
-  // - If filter set:
-  //     show if (payload.from === filter AND payload.to == myPub OR null)
-  //     OR (payload.to === filter AND payload.from == myPub)
-  //     OR (payload.from === filter AND payload.to === myPub)   (normal inbound)
+  const payload = parsePayload(raw, ts);
   if (filter) {
-    const fromIsPeer = payload.from === filter;
-    const toIsPeer = payload.to === filter;
-    const fromIsMe = !!myPub && payload.from === myPub;
-    const toIsMe = !!myPub && payload.to === myPub;
-
-    const show =
-      (fromIsPeer && toIsMe) ||
-      (fromIsMe && toIsPeer) ||
-      // legacy broadcast tag to peer: include if from peer and no `to` parsed
-      (fromIsPeer && payload.to == null && fromIsMe === false);
-
-    if (!show) return out;
+    if (payload.to !== filter && payload.from !== filter) {
+      return out;
+    }
   }
 
   out.push({
-    key: `${b.index}:${b.hash}`,
+    key: `${b.index}:${b.hash ?? b.timestamp_ms}`,
     from: payload.from,
     to: payload.to ?? null,
     text: payload.text,
-    ts: payload.ts_ms || ts,
+    ts: payload.ts_ms ?? ts,
     mine: !!myPub && payload.from === myPub,
   });
   return out;
 }
 
+/** Flatten all blocks into a sorted chat transcript. */
 function extractChatItems(
   bc: Blockchain,
   myPub?: string,
@@ -115,6 +104,10 @@ function extractChatItems(
   list.sort((a, b) => a.ts - b.ts);
   return list;
 }
+
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
+/* ------------------------------------------------------------------ */
 
 export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
   const chatItems = useMemo(
@@ -132,9 +125,7 @@ export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
       {chatItems.map((c) => (
         <div
           key={c.key}
-          className={`mb-2 flex w-full ${
-            c.mine ? 'justify-end' : 'justify-start'
-          }`}
+          className={`mb-2 flex w-full ${c.mine ? 'justify-end' : 'justify-start'}`}
         >
           <div
             className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
