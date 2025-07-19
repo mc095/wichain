@@ -11,6 +11,7 @@ export interface PeerInfo {
   last_seen_ms?: number;
 }
 
+/** Canonical chat body used by UI. */
 export interface ChatPayloadV1 {
   from: string;           // sender pubkey b64
   to?: string | null;     // receiver pubkey b64; null => group/all
@@ -18,16 +19,7 @@ export interface ChatPayloadV1 {
   ts_ms: number;          // unix ms
 }
 
-export interface SignedMessage {
-  id: string;
-  from: string;
-  to?: string | null;
-  timestamp_ms: number;
-  content: string;
-  sig: string;
-}
-
-/** Minimal block shape used by ChatView; NOT the on‑disk blockchain anymore. */
+/** Minimal block shape used by ChatView (synthetic). */
 export interface Block {
   index: number;
   timestamp_ms: number;
@@ -35,7 +27,7 @@ export interface Block {
   nonce: number;
   hash: string;
   data?: string;     // JSON ChatPayloadV1 string
-  raw_data?: string; // legacy fallback
+  raw_data?: string; // legacy fallback (unused in synthetic path)
   payload?: unknown;
 }
 
@@ -73,8 +65,8 @@ export async function apiGetPeers(): Promise<PeerInfo[]> {
 }
 
 /**
- * Fetch chat history from backend and expose as a synthetic Blockchain.
- * Each chat payload becomes one pseudo‑block; hashes are placeholder strings.
+ * High‑level chat history from backend.
+ * We synthesize a pseudo‑blockchain that ChatView already knows how to render.
  */
 export async function apiGetBlockchain(): Promise<Blockchain> {
   try {
