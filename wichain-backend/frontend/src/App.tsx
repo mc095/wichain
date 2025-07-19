@@ -1,37 +1,64 @@
 // frontend/src/App.tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   apiGetIdentity,
   apiSetAlias,
   apiGetPeers,
-  apiGetBlockchain,
-  apiSendMessage,
+  apiAddMessage,
+  apiGetChatHistory,
+  apiResetData,
   type Identity,
   type PeerInfo,
-  type Blockchain,
+  type ChatPayload,
 } from './lib/api';
+
+import { listen } from '@tauri-apps/api/event';
+
+import { HeaderBar } from './components/HeaderBar';
+import { OnboardingWizard } from './components/OnboardingWizard';
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
-import { AliasModal } from './components/AliasModal';
-import { listen } from '@tauri-apps/api/event';
-import './App.css';
-import './index.css';
+
+import './index.css'; // tailwind base + overrides
+import './App.css';   // minimal extras
 
 export default function App() {
-  /* ─ Identity ─ */
+  // ---------------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------------
   const [identity, setIdentity] = useState<Identity | null>(null);
+  const [peers, setPeers] = useState<PeerInfo[]>([]);
+  const [chat, setChat] = useState<ChatPayload[]>([]);
+  const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [aliasEditOpen, setAliasEditOpen] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Initial load
+  // ---------------------------------------------------------------------------
   useEffect(() => {
-    apiGetIdentity().then(setIdentity).catch(console.error);
+    (async () => {
+      const id = await apiGetIdentity();
+      setIdentity(id);
+      if (!id.alias || id.alias.startsWith('Anon-')) {
+        setShowOnboarding(true);
+      }
+    })();
   }, []);
 
-  /* ─ Peers ─ */
-  const [peers, setPeers] = useState<PeerInfo[]>([]);
-  const refreshPeers = useCallback(() => {
-    apiGetPeers().then(setPeers).catch(console.error);
+  // ---------------------------------------------------------------------------
+  // Peer refresh & subscriptions
+  // ---------------------------------------------------------------------------
+  const refreshPeers = useCallback(async () => {
+    const p = await apiGetPeers();
+    setPeers(p);
   }, []);
+
   useEffect(() => {
-    refreshPeers();
-    const unlistenPromise = listen('peer_update', refreshPeers);
+    refreshPeers(); // initial
+    const unlistenPromise = listen('peer_update', () => {
+      refreshPeers();
+    });
     const interval = setInterval(refreshPeers, 5_000);
     return () => {
       clearInterval(interval);
@@ -39,136 +66,172 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  /* ─ Blockchain ─ */
-  const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
-  const refreshChain = useCallback(() => {
-    apiGetBlockchain().then(setBlockchain).catch(console.error);
+  // ---------------------------------------------------------------------------
+  // Chat refresh & subscriptions
+  // ---------------------------------------------------------------------------
+  const refreshChat = useCallback(async () => {
+    const msgs = await apiGetChatHistory();
+    setChat(msgs);
   }, []);
+
   useEffect(() => {
-    refreshChain();
-    const unlistenPromise = listen('chain_update', refreshChain);
-    const interval = setInterval(refreshChain, 10_000);
+    refreshChat();
+    const unlistenPromise = listen('chat_update', () => {
+      refreshChat();
+    });
+    const interval = setInterval(refreshChat, 10_000);
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
     };
-  }, [refreshChain]);
+  }, [refreshChat]);
 
-  /* ─ Selected peer ─ */
-  const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
-
-  /* ─ Alias modal ─ */
-  const [showAliasModal, setShowAliasModal] = useState(false);
+  // Alias changed on backend (after set_alias or reset)
   useEffect(() => {
-    if (
-      identity &&
-      (identity.alias.trim() === '' || identity.alias.startsWith('Anon-'))
-    ) {
-      setShowAliasModal(true);
-    }
-  }, [identity]);
+    const unlistenPromise = listen('alias_update', async () => {
+      const id = await apiGetIdentity();
+      setIdentity(id);
+    });
+    return () => {
+      unlistenPromise.then((un) => un());
+    };
+  }, []);
 
-  const handleAliasSave = useCallback(
-    async (alias: string) => {
-      await apiSetAlias(alias);
-      const updated = await apiGetIdentity();
-      setIdentity(updated);
-      setShowAliasModal(false);
-      refreshPeers();
-    },
-    [refreshPeers]
-  );
+  // Reset done -> reload identity & chat, then show onboarding again
+  useEffect(() => {
+    const unlistenPromise = listen('reset_done', async () => {
+      const id = await apiGetIdentity();
+      setIdentity(id);
+      setChat([]);
+      setPeers([]);
+      setShowOnboarding(true);
+    });
+    return () => {
+      unlistenPromise.then((un) => un());
+    };
+  }, []);
 
-  /* ─ Message entry ─ */
+  // ---------------------------------------------------------------------------
+  // Derived: current alias & my id
+  // ---------------------------------------------------------------------------
+  const myPub = identity?.public_key_b64 ?? '';
+  const myAlias = identity?.alias ?? '(unknown)';
+
+  // ---------------------------------------------------------------------------
+  // Send message
+  // ---------------------------------------------------------------------------
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-
   const send = useCallback(async () => {
     const msg = text.trim();
-    if (!msg || !selectedPeer) return;
+    if (!msg) return;
     setSending(true);
-    const ok = await apiSendMessage(selectedPeer, msg);
+    const ok = await apiAddMessage(msg, selectedPeer);
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain();
+      refreshChat(); // optimistic
     }
-  }, [text, selectedPeer, refreshChain]);
+  }, [text, selectedPeer, refreshChat]);
 
-  const myPub = identity?.public_key_b64 ?? '';
+  // ---------------------------------------------------------------------------
+  // Apply alias (used from onboarding & header rename)
+  // ---------------------------------------------------------------------------
+  const applyAlias = useCallback(
+    async (alias: string) => {
+      await apiSetAlias(alias);
+      const id = await apiGetIdentity();
+      setIdentity(id);
+      setAliasEditOpen(false);
+      setShowOnboarding(false);
+    },
+    []
+  );
+
+  // ---------------------------------------------------------------------------
+  // Reset data (header menu)
+  // ---------------------------------------------------------------------------
+  const doReset = useCallback(async () => {
+    if (!confirm('This will delete your local identity and chat history. Continue?')) {
+      return;
+    }
+    await apiResetData();
+    const id = await apiGetIdentity();
+    setIdentity(id);
+    setChat([]);
+    setPeers([]);
+    setSelectedPeer(null);
+    setShowOnboarding(true);
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Filter chat for current view
+  // ---------------------------------------------------------------------------
+  const filteredChat = useMemo(() => {
+    if (!selectedPeer) return chat; // group view
+    return chat.filter(
+      (m) =>
+        (m.to === selectedPeer && m.from === myPub) ||
+        (m.from === selectedPeer && (m.to === myPub || m.to === null)),
+    );
+  }, [chat, selectedPeer, myPub]);
+  
+  const displayedPeers = peers.filter((p) => p.id !== myPub);
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+  if (showOnboarding && identity) {
+    return (
+      <OnboardingWizard
+        initialAlias={identity.alias}
+        onAliasSave={applyAlias}
+        onDone={() => setShowOnboarding(false)}
+        onDiscoverPeers={refreshPeers}
+      />
+    );
+  }
 
   return (
-    <div className="w-full h-screen bg-neutral-950 text-neutral-100 flex flex-col">
-      {showAliasModal && (
-        <AliasModal
-          initialAlias={identity?.alias ?? ''}
-          onSave={handleAliasSave}
-          onCancel={() => setShowAliasModal(false)}
+    <div className="h-full w-full flex flex-col bg-zinc-950 text-zinc-100">
+      <HeaderBar
+        alias={myAlias}
+        myId={myPub}
+        onRename={() => setAliasEditOpen(true)}
+        onReset={doReset}
+      />
+
+      {/* rename inline modal */}
+      {aliasEditOpen && identity && (
+        <OnboardingWizard
+          initialAlias={identity.alias}
+          soloRenameMode
+          onAliasSave={applyAlias}
+          onDone={() => setAliasEditOpen(false)}
+          onDiscoverPeers={() => {}}
         />
       )}
 
-      <header className="flex items-center justify-between px-4 py-2 border-b border-neutral-800 bg-neutral-900">
-        <h1 className="text-lg font-semibold">WiChain</h1>
-        <div className="text-right">
-          <div className="font-medium">{identity?.alias ?? '(unknown alias)'}</div>
-          <div className="text-xs text-neutral-400">
-            {myPub ? myPub.slice(0, 20) + '…' : '(no key)'}
-          </div>
-        </div>
-      </header>
-
-      <div className="flex flex-1 min-h-0">
-        <aside className="w-64 border-r border-neutral-800 overflow-y-auto p-2">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold text-neutral-300 uppercase tracking-wide">
-              Peers
-            </h2>
-            <button
-              className="text-xs text-blue-400 hover:text-blue-300 underline"
-              onClick={refreshPeers}
-            >
-              Refresh
-            </button>
-          </div>
-          <PeerList
-            peers={peers}
-            selected={selectedPeer}
-            onSelect={setSelectedPeer}
-            selfId={myPub}
-            selfAlias={identity?.alias ?? ''}
-          />
+      <div className="flex-1 flex overflow-hidden">
+        <aside className="w-64 border-r border-zinc-800 overflow-y-auto p-2">
+          
+          <PeerList peers={displayedPeers} selected={selectedPeer} onSelect={setSelectedPeer} />
         </aside>
 
-        <section className="flex flex-col flex-1 min-h-0">
-          <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-800 bg-neutral-900">
-            <div className="text-sm text-neutral-400">
-              {selectedPeer
-                ? `Chat with ${peerAlias(peers, selectedPeer) ?? '(unknown peer)'}`
-                : 'Select a peer to chat'}
-            </div>
-            <button
-              className="text-xs text-blue-400 hover:text-blue-300 underline"
-              onClick={() => setShowAliasModal(true)}
-            >
-              Rename
-            </button>
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto p-4">
+        <main className="flex-1 flex flex-col">
+          <div className="flex-1 overflow-y-auto">
             <ChatView
-              blockchain={blockchain}
-              myPubkeyB64={myPub}
+              chat={filteredChat}
+              myId={myPub}
               peerFilter={selectedPeer}
             />
           </div>
 
-          <div className="flex items-center gap-2 p-3 border-t border-neutral-800 bg-neutral-900">
+          <div className="p-2 border-t border-zinc-800 flex gap-2">
             <input
               type="text"
-              className="flex-1 rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              placeholder={
-                selectedPeer ? 'Type a message…' : 'Select a peer to enable chat'
-              }
+              className="flex-1 rounded bg-zinc-800 text-zinc-100 px-3 py-2 outline-none focus:ring focus:ring-indigo-500/40"
+              placeholder={selectedPeer ? 'Message peer…' : 'Message everyone…'}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -177,22 +240,18 @@ export default function App() {
                   send();
                 }
               }}
-              disabled={sending || !selectedPeer}
+              disabled={sending}
             />
             <button
-              className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500"
+              className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
+              disabled={sending || !text.trim()}
               onClick={send}
-              disabled={sending || !selectedPeer || !text.trim()}
             >
               Send
             </button>
           </div>
-        </section>
+        </main>
       </div>
     </div>
   );
-}
-
-function peerAlias(peers: PeerInfo[], id: string): string | undefined {
-  return peers.find((p) => p.id === id)?.alias;
 }

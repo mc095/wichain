@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* App-specific tweaks */
+html,body,#root {
+  @apply h-full w-full bg-gray-950 text-gray-100;
+  font-family: Inter, system-ui, sans-serif;
+}

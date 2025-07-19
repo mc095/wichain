@@ -1,13 +1,4 @@
-//! WiChain LAN networking (UDP discovery + direct messaging).
-//!
-//! Responsibilities:
-//! - Periodically broadcast *presence* (Peer + Ping) so others discover us.
-//! - Reply to Pings with Pong (unicast).
-//! - Track peers (id -> PeerInfo + last SocketAddr).
-//! - Send **direct** JSON payloads to a specific peer (DirectBlock).
-//! - Forward all received messages to caller via mpsc.
-//!
-//! We no longer broadcast entire blockchains for chat sync.
+//! WiChain LAN networking: UDP peer discovery + direct peer messages.
 
 use std::{
     collections::HashMap,
@@ -27,7 +18,6 @@ const BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const PEER_STALE_SECS: u64 = 30;
 const MAX_DGRAM: usize = 8 * 1024;
 
-/// Info exposed to UI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerInfo {
     pub id: String,
@@ -36,7 +26,6 @@ pub struct PeerInfo {
     pub last_seen_ms: u64,
 }
 
-/// Messages sent on LAN
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NetworkMessage {
@@ -44,10 +33,10 @@ pub enum NetworkMessage {
     Ping { id: String, alias: String },
     Pong { id: String, alias: String },
 
-    /// Legacy (not used anymore)
+    // Legacy chain broadcast (unused in new flow, but still deserialized)
     Block { block_json: String },
 
-    /// Direct peer-to-peer payload (arbitrary JSON string)
+    // New direct block
     DirectBlock {
         from: String,
         to: String,
@@ -62,11 +51,10 @@ struct PeerEntry {
     last_addr: SocketAddr,
 }
 
-/// Network node
 pub struct NetworkNode {
     port: u16,
     pub id: String,
-    alias: Arc<Mutex<String>>,
+    pub alias: String,
     pub pubkey: String,
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
 }
@@ -76,46 +64,13 @@ impl NetworkNode {
         Self {
             port,
             id,
-            alias: Arc::new(Mutex::new(alias)),
+            alias,
             pubkey,
             peers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Current alias snapshot
-    async fn current_alias(&self) -> String {
-        self.alias.lock().await.clone()
-    }
-
-    /// Update alias & announce immediately
-    pub async fn set_alias(&self, new_alias: String) {
-        {
-            let mut a = self.alias.lock().await;
-            *a = new_alias.clone();
-        }
-        self.announce_once().await;
-    }
-
-    /// Send a one-shot Peer presence announce (best-effort)
-    pub async fn announce_once(&self) {
-        let bind_addr = "0.0.0.0:0";
-        let Ok(sock) = UdpSocket::bind(bind_addr).await else {
-            return;
-        };
-        let _ = sock.set_broadcast(true);
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), self.port);
-        let alias = self.current_alias().await;
-        let msg = NetworkMessage::Peer {
-            id: self.id.clone(),
-            alias,
-            pubkey: self.pubkey.clone(),
-        };
-        let _ = send_to(&sock, &msg, addr).await;
-    }
-
-    /// Start network tasks
     pub async fn start(&self, tx: mpsc::Sender<NetworkMessage>) {
-        // bind listener
         let bind_addr = format!("0.0.0.0:{}", self.port);
         let socket = match UdpSocket::bind(&bind_addr).await {
             Ok(s) => {
@@ -130,24 +85,24 @@ impl NetworkNode {
         };
         let socket = Arc::new(socket);
 
-        // receiver
+        // Receive loop
         {
             let socket = socket.clone();
             let tx = tx.clone();
             let peers = self.peers.clone();
             let my_id = self.id.clone();
-            let alias = self.alias.clone();
+            let my_alias = self.alias.clone();
             let port = self.port;
             tokio::spawn(async move {
-                recv_loop(socket, tx, peers, my_id, alias, port).await;
+                recv_loop(socket, tx, peers, my_id, my_alias, port).await;
             });
         }
 
-        // periodic presence broadcast
+        // Periodic broadcast (announce + ping)
         {
             let socket = socket.clone();
-            let alias = self.alias.clone();
             let id = self.id.clone();
+            let alias = self.alias.clone();
             let pubkey = self.pubkey.clone();
             let port = self.port;
             tokio::spawn(async move {
@@ -156,7 +111,7 @@ impl NetworkNode {
         }
     }
 
-    /// Send direct payload to a peer by id
+    /// Send a direct block payload to a peer we have an address for.
     pub async fn send_direct_block(
         &self,
         peer_id: &str,
@@ -179,18 +134,32 @@ impl NetworkNode {
         }
     }
 
-        /// Broadcast an arbitrary message (Peer announce etc.) one time.
-    pub async fn quick_broadcast(&self, msg: &NetworkMessage) -> anyhow::Result<()> {
-       
+    /// Force a broadcast announce + ping (Find Peers button).
+    pub async fn ping_now(&self) -> anyhow::Result<()> {
         let bind_addr = "0.0.0.0:0";
         let socket = UdpSocket::bind(bind_addr).await?;
-        let _ = socket.set_broadcast(true);
+        socket.set_broadcast(true)?;
         let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), self.port);
-        let bytes = serde_json::to_vec(msg)?;
-        socket.send_to(&bytes, broadcast_addr).await?;
+
+        let announce = NetworkMessage::Peer {
+            id: self.id.clone(),
+            alias: self.alias.clone(),
+            pubkey: self.pubkey.clone(),
+        };
+        socket
+            .send_to(&serde_json::to_vec(&announce)?, broadcast_addr)
+            .await?;
+
+        let ping = NetworkMessage::Ping {
+            id: self.id.clone(),
+            alias: self.alias.clone(),
+        };
+        socket
+            .send_to(&serde_json::to_vec(&ping)?, broadcast_addr)
+            .await?;
+
         Ok(())
     }
-
 
     pub async fn list_peers(&self) -> Vec<PeerInfo> {
         let map = self.peers.lock().await;
@@ -198,13 +167,12 @@ impl NetworkNode {
     }
 }
 
-/// Receive loop
 async fn recv_loop(
     socket: Arc<UdpSocket>,
     tx: mpsc::Sender<NetworkMessage>,
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
     my_id: String,
-    my_alias: Arc<Mutex<String>>,
+    my_alias: String,
     _port: u16,
 ) {
     let mut buf = vec![0u8; MAX_DGRAM];
@@ -227,22 +195,20 @@ async fn recv_loop(
             }
             NetworkMessage::Ping { id, alias } => {
                 update_peer(&peers, id, alias, id, src).await;
-                // reply Pong
                 let pong = NetworkMessage::Pong {
                     id: my_id.clone(),
-                    alias: my_alias.lock().await.clone(),
+                    alias: my_alias.clone(),
                 };
                 let _ = send_to(&socket, &pong, src).await;
             }
             NetworkMessage::Pong { id, alias } => {
                 update_peer(&peers, id, alias, id, src).await;
             }
-            NetworkMessage::Block { .. } => {
-                // ignore
-            }
             NetworkMessage::DirectBlock { from, .. } => {
-                // best-effort ensure peer exists (alias unknown -> id)
                 update_peer(&peers, from, from, from, src).await;
+            }
+            NetworkMessage::Block { .. } => {
+                // legacy ignore
             }
         }
 
@@ -283,37 +249,25 @@ async fn maybe_gc_stale(peers: &Arc<Mutex<HashMap<String, PeerEntry>>>) {
     map.retain(|_, p| p.last_seen >= cutoff);
 }
 
-
-
 async fn send_to(socket: &UdpSocket, msg: &NetworkMessage, addr: SocketAddr) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(msg).unwrap();
     socket.send_to(&bytes, addr).await?;
     Ok(())
 }
 
-async fn periodic_broadcast(
-    socket: Arc<UdpSocket>,
-    id: String,
-    alias: Arc<Mutex<String>>,
-    pubkey: String,
-    port: u16,
-) {
+async fn periodic_broadcast(socket: Arc<UdpSocket>, id: String, alias: String, pubkey: String, port: u16) {
     let broadcast_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), port);
     loop {
-        let alias_now = alias.lock().await.clone();
-
-        // presence
         let announce = NetworkMessage::Peer {
             id: id.clone(),
-            alias: alias_now.clone(),
+            alias: alias.clone(),
             pubkey: pubkey.clone(),
         };
         let _ = send_to(&socket, &announce, broadcast_addr).await;
 
-        // ping
         let ping = NetworkMessage::Ping {
             id: id.clone(),
-            alias: alias_now.clone(),
+            alias: alias.clone(),
         };
         let _ = send_to(&socket, &ping, broadcast_addr).await;
 

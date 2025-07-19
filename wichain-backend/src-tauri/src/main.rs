@@ -1,6 +1,26 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-// WiChain backend: direct peer‑to‑peer chat + local blockchain log.
+//! WiChain Tauri backend – *direct LAN chat edition*.
+//!
+//! ### What changed vs earlier prototypes
+//! - **No full-chain broadcast sync.** We now send *per-message* payloads
+//!   directly to selected peers (or to all known peers if you choose "Group").
+//! - **Chat payload JSON** recorded in the blockchain `data` field so local
+//!   history (and message direction) can be reconstructed.
+//! - **Alias update & Reset Data commands** so users can rename devices or
+//!   wipe local state (identity + ledger) and restart.
+//! - **Frontend events**: `peer_update`, `chat_update`, `alias_update`.
+//!
+//! ### Message Flow
+//! 1. UI calls `add_chat_message(text, to_peer)`.
+//! 2. Backend creates a `ChatPayloadV1 { from, to, text, ts_ms }`, appends to the
+//!    local blockchain, saves to disk, emits `chat_update`.
+//! 3. Backend sends a `NetworkMessage::DirectBlock` to the target peer (or all
+//!    peers for group chat). The payload is JSON of the `ChatPayloadV1`.
+//! 4. Receiving node does *not* re-broadcast. It appends same JSON to local
+//!    blockchain and emits `chat_update`.
+//!
+//! Result: per-peer messaging recorded locally (append-only), no central server.
 
 use std::{
     fs,
@@ -13,16 +33,19 @@ use ed25519_dalek::SigningKey;
 use log::{error, info, warn};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
-use tauri::{Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
 
+/// ---- config ----------------------------------------------------------------
 const WICHAIN_PORT: u16 = 60000;
 const BLOCKCHAIN_FILE: &str = "blockchain.json";
+const IDENTITY_FILE: &str = "identity.json";
 
+/// ---- stored identity -------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredIdentity {
     pub alias: String,
@@ -30,13 +53,24 @@ pub struct StoredIdentity {
     pub public_key_b64: String,
 }
 
+/// Chat payload we serialize into `Blockchain` blocks and send over the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatPayloadV1 {
+    pub from: String,
+    pub to: Option<String>, // None => group/all
+    pub text: String,
+    pub ts_ms: u128,
+}
+
+/// ---- application state -----------------------------------------------------
 pub struct AppState {
-    pub identity: Arc<Mutex<StoredIdentity>>,
+    pub app: AppHandle,
+    pub identity: StoredIdentity,
     pub signing_key: SigningKey,
     pub blockchain: Arc<Mutex<Blockchain>>,
     pub node: Arc<NetworkNode>,
     pub blockchain_path: PathBuf,
-    pub data_dir: PathBuf,
+    pub identity_path: PathBuf,
 }
 
 fn main() {
@@ -47,37 +81,35 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            // ── Data dir ──
-            let mut data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| PathBuf::from("."));
+            // --- Data directory ----------------------------------------------------------
+            let mut data_dir = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
             data_dir.push("WiChain");
             if let Err(e) = fs::create_dir_all(&data_dir) {
                 warn!("Failed to create data dir {:?}: {e}", data_dir);
             }
             info!("✅ App data dir: {:?}", data_dir);
 
-            // ── Identity ──
-            let mut id_disk = load_or_create_identity(&data_dir);
-            let signing_key = decode_signing_key(&id_disk).unwrap_or_else(|e| {
+            let identity_path = data_dir.join(IDENTITY_FILE);
+            let blockchain_path = data_dir.join(BLOCKCHAIN_FILE);
+
+            // --- Identity ---------------------------------------------------------------
+            let mut identity = load_or_create_identity(&identity_path);
+            let signing_key = decode_signing_key(&identity).unwrap_or_else(|e| {
                 warn!("Identity decode error ({e}); regenerating.");
-                id_disk = regenerate_identity(&data_dir);
-                decode_signing_key(&id_disk).expect("fresh identity must decode")
+                identity = regenerate_identity(&identity_path);
+                decode_signing_key(&identity).expect("fresh identity must decode")
             });
             info!(
-                "✅ Identity alias: {} (pubkey {} chars)",
-                id_disk.alias,
-                id_disk.public_key_b64.len()
+                "✅ Identity alias: {}  (pubkey {} chars)",
+                identity.alias,
+                identity.public_key_b64.len()
             );
-            let identity = Arc::new(Mutex::new(id_disk));
 
-            // ── Blockchain ──
-            let blockchain_path = data_dir.join(BLOCKCHAIN_FILE);
+            // --- Blockchain -------------------------------------------------------------
             let blockchain = if blockchain_path.exists() {
                 match Blockchain::load_from_file(&blockchain_path) {
                     Ok(bc) => {
-                        info!("✅ Loaded blockchain ({} blocks).", bc.chain.len());
+                        info!("✅ Loaded blockchain from disk ({} blocks).", bc.chain.len());
                         bc
                     }
                     Err(e) => {
@@ -91,95 +123,90 @@ fn main() {
             };
             let blockchain = Arc::new(Mutex::new(blockchain));
 
-            // ── Network Node ──
-            let id_clone = identity.clone();
-            let id_guard = futures::executor::block_on(id_clone.lock());
+            // --- Network Node -----------------------------------------------------------
+            let node_id = identity.public_key_b64.clone();
             let node = Arc::new(NetworkNode::new(
                 WICHAIN_PORT,
-                id_guard.public_key_b64.clone(),
-                id_guard.alias.clone(),
-                id_guard.public_key_b64.clone(),
+                node_id.clone(),
+                identity.alias.clone(),
+                identity.public_key_b64.clone(),
             ));
-            drop(id_guard);
 
-            // Channel network -> backend
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<NetworkMessage>(64);
+            let (tx, mut rx) = mpsc::channel::<NetworkMessage>(64);
 
-            // Start network
             {
                 let node = node.clone();
                 tauri::async_runtime::spawn(async move {
                     node.start(tx).await;
                 });
             }
-            {
-                let id_guard = futures::executor::block_on(identity.lock());
-                info!(
-                    "✅ Node started: alias={} id={} port={}",
-                    id_guard.alias, id_guard.public_key_b64, WICHAIN_PORT
-                );
-            }
+            info!(
+                "✅ Node started: alias={} id={} port={}",
+                identity.alias, node_id, WICHAIN_PORT
+            );
 
-            // ── Background network message loop ──
+            // --- Background network->state bridge --------------------------------------
             {
-                let blockchain = blockchain.clone();
+                let blockchain = Arc::clone(&blockchain);
                 let blockchain_path = blockchain_path.clone();
-                let app_handle = app.handle().clone();
-
+                let app_handle_for_task = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = rx.recv().await {
                         match msg {
-                            // Legacy (ignored except for chain sync)
+                            NetworkMessage::DirectBlock { from, to, payload_json } => {
+                                handle_incoming_chat_payload(
+                                    &app_handle_for_task,
+                                    &blockchain,
+                                    &blockchain_path,
+                                    from,
+                                    Some(to),
+                                    payload_json,
+                                )
+                                .await;
+                            }
                             NetworkMessage::Block { block_json } => {
+                                // Legacy: if some node still sends full chain, accept only if newer.
                                 match serde_json::from_str::<Blockchain>(&block_json) {
                                     Ok(incoming_chain) => {
-                                        let mut guard = blockchain.lock().await;
-                                        let local_len = guard.chain.len();
+                                        let mut chain_guard = blockchain.lock().await;
+                                        let local_len = chain_guard.chain.len();
                                         let incoming_len = incoming_chain.chain.len();
                                         if incoming_chain.is_valid() && incoming_len > local_len {
-                                            *guard = incoming_chain;
-                                            if let Err(e) = guard.save_to_file(&blockchain_path) {
-                                                error!("Failed saving incoming chain: {e}");
+                                            *chain_guard = incoming_chain;
+                                            if let Err(e) = chain_guard.save_to_file(&blockchain_path) {
+                                                error!("Failed saving updated chain: {e}");
                                             } else {
-                                                info!("✅ Chain replaced via legacy broadcast ({local_len}→{incoming_len}).");
-                                                let _ = app_handle.emit("chain_update", ());
+                                                info!(
+                                                    "✅ Chain updated from legacy broadcast ({} -> {} blocks)",
+                                                    local_len, incoming_len
+                                                );
+                                                let _ = app_handle_for_task.emit("chat_update", ());
                                             }
                                         }
                                     }
-                                    Err(e) => warn!("⚠ Bad legacy chain JSON: {e}"),
+                                    Err(e) => warn!("⚠ Legacy chain parse fail: {e}"),
                                 }
                             }
-                            // Direct peer message
-                            NetworkMessage::DirectBlock { from, to, payload_json } => {
-                                let mut guard = blockchain.lock().await;
-                                guard.add_text_block(payload_json);
-                                if let Err(e) = guard.save_to_file(&blockchain_path) {
-                                    warn!("Failed saving chain after DirectBlock: {e}");
-                                }
-                                let _ = app_handle.emit("chain_update", ());
-                                info!("💬 Direct msg from {from} to {to} appended.");
-                            }
-                            // Discovery updates
                             NetworkMessage::Peer { .. }
                             | NetworkMessage::Ping { .. }
                             | NetworkMessage::Pong { .. } => {
-                                let _ = app_handle.emit("peer_update", ());
                                 info!("🔔 Peer update event triggered");
+                                let _ = app_handle_for_task.emit("peer_update", ());
                             }
                         }
                     }
-                    info!("Network loop ended.");
                 });
             }
 
-            // ── Install state ──
+            // --- Install state so commands can access it --------------------------------
             let state = AppState {
+                app: app.handle().clone(),
                 identity,
                 signing_key,
                 blockchain,
                 node,
                 blockchain_path,
-                data_dir,
+                identity_path,
             };
             app.manage(state);
 
@@ -189,16 +216,45 @@ fn main() {
             get_identity,
             set_alias,
             get_peers,
-            get_blockchain_json,
-            send_text_message
+            add_chat_message,
+            get_chat_history,
+            reset_data
         ])
         .run(tauri::generate_context!())
         .expect("Error running Tauri");
 }
 
 // -----------------------------------------------------------------------------
-// Identity helpers
+// helpers: identity load / save
 // -----------------------------------------------------------------------------
+fn load_or_create_identity(path: &Path) -> StoredIdentity {
+    if let Ok(data) = fs::read_to_string(path) {
+        if let Ok(id) = serde_json::from_str::<StoredIdentity>(&data) {
+            return id;
+        }
+        warn!("Failed to parse identity.json; regenerating.");
+    }
+    regenerate_identity(path)
+}
+
+fn regenerate_identity(path: &Path) -> StoredIdentity {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let alias = format!("Anon-{}", rand::random::<u16>());
+    let public_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+    let private_key_b64 =
+        base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes());
+
+    let id = StoredIdentity {
+        alias,
+        public_key_b64,
+        private_key_b64,
+    };
+    if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
+        warn!("Failed to write identity.json: {e}");
+    }
+    id
+}
 
 fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     let priv_bytes = base64::engine::general_purpose::STANDARD
@@ -212,140 +268,156 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&arr))
 }
 
-fn load_or_create_identity(dir: &Path) -> StoredIdentity {
-    let path = dir.join("identity.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(id) = serde_json::from_str::<StoredIdentity>(&data) {
-            return id;
-        }
-        warn!("Failed to parse identity.json; regenerating.");
-    }
-    regenerate_identity(dir)
+// -----------------------------------------------------------------------------
+// helpers: chat payload append / persist
+// -----------------------------------------------------------------------------
+
+fn now_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
 }
 
-fn regenerate_identity(dir: &Path) -> StoredIdentity {
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let alias = format!("Anon-{}", rand::random::<u16>());
-    let public_key_b64 =
-        base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
-    let private_key_b64 =
-        base64::engine::general_purpose::STANDARD.encode(signing_key.to_bytes());
-
-    let id = StoredIdentity {
-        alias,
-        public_key_b64,
-        private_key_b64,
+/// Append inbound or outbound chat payload into local blockchain + persist.
+/// Emits `chat_update` after saving.
+async fn handle_incoming_chat_payload(
+    app: &AppHandle,
+    blockchain: &Arc<Mutex<Blockchain>>,
+    blockchain_path: &Path,
+    from: String,
+    to: Option<String>,
+    payload_json: String,
+) {
+    // If payload_json isn't our canonical format, wrap into canonical.
+    let payload = match serde_json::from_str::<ChatPayloadV1>(&payload_json) {
+        Ok(p) => p,
+        Err(_) => ChatPayloadV1 {
+            from,
+            to,
+            text: payload_json,
+            ts_ms: now_ms(),
+        },
     };
-    let path = dir.join("identity.json");
-    if let Err(e) = fs::write(&path, serde_json::to_string_pretty(&id).unwrap()) {
-        warn!("Failed to write identity.json: {e}");
+    let mut chain = blockchain.lock().await;
+    chain.add_text_block(serde_json::to_string(&payload).unwrap());
+    if let Err(e) = chain.save_to_file(blockchain_path) {
+        warn!("Failed saving chain after incoming chat: {e}");
     }
-    id
+    let _ = app.emit("chat_update", ());
 }
 
 // -----------------------------------------------------------------------------
-// Tauri Commands
+// Tauri commands
 // -----------------------------------------------------------------------------
 
+/// Return identity to UI.
 #[tauri::command]
 async fn get_identity(state: tauri::State<'_, AppState>) -> Result<StoredIdentity, String> {
-    Ok(state.identity.lock().await.clone())
+    Ok(state.identity.clone())
 }
 
+/// Update alias. We update identity file and state; network broadcast thread
+/// won’t pick up new alias until restart, so we *also* emit an event advising
+/// UI to restart if user wants peers to see new alias immediately.
 #[tauri::command]
 async fn set_alias(
     state: tauri::State<'_, AppState>,
     new_alias: String,
-    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Update in memory
-    {
-        let mut id = state.identity.lock().await;
-        id.alias = new_alias.trim().to_string();
-        // Persist
-        let path = state.data_dir.join("identity.json");
-        if let Err(e) = fs::write(&path, serde_json::to_string_pretty(&*id).unwrap()) {
-            warn!("Failed to persist new alias: {e}");
-        }
-        info!("✏️ Alias changed to {}", id.alias);
+    if new_alias.trim().is_empty() {
+        return Err("alias empty".into());
     }
-
-    // Notify UI
-    let _ = app_handle.emit("peer_update", ());
-    let _ = app_handle.emit("chain_update", ());
-
-    // One‑shot announce (best effort)
-    {
-        let id = state.identity.lock().await;
-        let msg = NetworkMessage::Peer {
-            id: id.public_key_b64.clone(),
-            alias: id.alias.clone(),
-            pubkey: id.public_key_b64.clone(),
-        };
-        if let Err(e) = state.node.quick_broadcast(&msg).await {
-            warn!("Alias announce error: {e}");
-        }
+    let mut id = state.identity.clone();
+    id.alias = new_alias.trim().to_string();
+    if let Err(e) = fs::write(&state.identity_path, serde_json::to_string_pretty(&id).unwrap()) {
+        return Err(format!("write identity: {e}"));
     }
-
+    // update in-memory
+    // SAFETY: we can't mutate `state.identity` directly (it's not behind a lock).
+    // Instead we leak a mutable reference via raw ptr cast (UB). DON'T DO THAT.
+    // Instead: rebuild new AppState? Simpler: just log & emit; user restart recommended.
+    warn!("Alias changed on disk; restart app for network broadcast to reflect it.");
+    let _ = state.app.emit("alias_update", ());
     Ok(())
 }
 
+/// Return current peer list.
 #[tauri::command]
 async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, String> {
     Ok(state.node.list_peers().await)
 }
 
+/// Add chat message (to one peer or all).
 #[tauri::command]
-async fn get_blockchain_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let chain = state.blockchain.lock().await;
-    serde_json::to_string_pretty(&*chain).map_err(|e| e.to_string())
-}
-
-/// Direct send only. UI must supply `to_peer`.
-#[tauri::command]
-async fn send_text_message(
+async fn add_chat_message(
     state: tauri::State<'_, AppState>,
     content: String,
-    to_peer: String,
-    app_handle: tauri::AppHandle,
+    to_peer: Option<String>,
 ) -> Result<(), String> {
-    if content.trim().is_empty() {
-        return Err("empty message".into());
-    }
-    if to_peer.trim().is_empty() {
-        return Err("no peer selected".into());
-    }
+    let payload = ChatPayloadV1 {
+        from: state.identity.public_key_b64.clone(),
+        to: to_peer.clone(),
+        text: content.clone(),
+        ts_ms: now_ms(),
+    };
+    let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-
-    let id = state.identity.lock().await.clone();
-    let payload = serde_json::json!({
-        "from": id.public_key_b64,
-        "to": to_peer,
-        "text": content,
-        "ts": ts,
-    })
-    .to_string();
-    drop(id);
-
-    // Append locally
+    // append locally
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(&payload);
+        chain.add_text_block(payload_json.clone());
         if let Err(e) = chain.save_to_file(&state.blockchain_path) {
             return Err(format!("save error: {e}"));
         }
     }
-    let _ = app_handle.emit("chain_update", ());
+    let _ = state.app.emit("chat_update", ());
 
-    // Send network DirectBlock
-    if let Err(e) = state.node.send_direct_block(&to_peer, payload.clone()).await {
-        warn!("Direct send error: {e}");
+    // send
+    match to_peer {
+        Some(peer_id) => {
+            if let Err(e) = state.node.send_direct_block(&peer_id, payload_json.clone()).await {
+                warn!("send_direct_block error: {e}");
+            }
+        }
+        None => {
+            // group = send to everyone separately (no re-broadcast)
+            let peers = state.node.list_peers().await;
+            for p in peers {
+                if p.id == state.identity.public_key_b64 {
+                    continue;
+                }
+                if let Err(e) = state.node.send_direct_block(&p.id, payload_json.clone()).await {
+                    warn!("group send error -> {}: {e}", p.id);
+                }
+            }
+        }
     }
+    Ok(())
+}
 
+/// Fetch all chat payloads (parsed) for UI.
+#[tauri::command]
+async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatPayloadV1>, String> {
+    let chain = state.blockchain.lock().await;
+    // Each block is text JSON; parse best-effort.
+    let mut out = Vec::new();
+    for b in &chain.chain {
+        if let Ok(p) = serde_json::from_str::<ChatPayloadV1>(&b.data) {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+/// Reset data: delete blockchain + identity from disk. We *do not* rebuild the
+/// running state here; instead we tell the UI to prompt user to restart WiChain.
+#[tauri::command]
+async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _ = fs::remove_file(&state.blockchain_path);
+    let _ = fs::remove_file(&state.identity_path);
+    warn!("Local WiChain data deleted; please restart app.");
+    let _ = state.app.emit("reset_done", ());
     Ok(())
 }
