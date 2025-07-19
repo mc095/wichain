@@ -5,7 +5,7 @@ import type { Blockchain, Block } from '../lib/api';
 interface Props {
   blockchain: Blockchain;
   myPubkeyB64?: string;
-  peerFilter: string; // required (we only render when peer selected)
+  peerFilter: string; // required
 }
 
 interface ChatItem {
@@ -17,7 +17,6 @@ interface ChatItem {
   mine: boolean;
 }
 
-/* Canonical payload */
 interface CanonPayload {
   from?: string;
   to?: string | null;
@@ -25,17 +24,13 @@ interface CanonPayload {
   ts?: number;
 }
 
-/* legacy inline tag: @peer:<id>:::<text> */
 function parseTaggedText(s: string): { to?: string; text: string } {
   const tag = '@peer:';
   if (s.startsWith(tag)) {
     const rest = s.slice(tag.length);
     const sep = rest.indexOf(':::');
     if (sep >= 0) {
-      return {
-        to: rest.slice(0, sep),
-        text: rest.slice(sep + 3),
-      };
+      return { to: rest.slice(0, sep), text: rest.slice(sep + 3) };
     }
   }
   return { text: s };
@@ -57,7 +52,6 @@ function itemsFromBlock(b: Block, myPub: string | undefined, peer: string): Chat
   // legacy data
   if (typeof b.data === 'string') {
     const tagged = parseTaggedText(b.data);
-    // we only show if the peer matches the legacy tag
     if (tagged.to !== peer) return items;
     items.push({
       key: `${b.index}:data`,
@@ -92,7 +86,7 @@ function itemsFromBlock(b: Block, myPub: string | undefined, peer: string): Chat
     const p = payload as CanonPayload;
     const from = p.from ?? b.hash.slice(0, 8);
     const to = p.to ?? null;
-    if (to !== peer && from !== peer) return items; // show only peer‑relevant
+    if (to !== peer && from !== peer) return items;
     items.push({
       key: `${b.index}:canon`,
       from,
@@ -142,9 +136,7 @@ export const ChatView: React.FC<Props> = ({ blockchain, myPubkeyB64, peerFilter 
           )}
           <div
             className={`px-3 py-2 rounded-lg max-w-[75%] break-words text-sm ${
-              c.mine
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-800 text-gray-100'
+              c.mine ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-100'
             }`}
           >
             {c.text}

@@ -13,7 +13,7 @@ import {
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
 import { listen } from '@tauri-apps/api/event';
-import './App.css'; // legacy; Tailwind utilities imported via index.css
+import './App.css';
 
 /* --- Alias Modal ---------------------------------------------------------- */
 function AliasModal({
@@ -88,7 +88,7 @@ export default function App() {
     };
   }, [refreshChain]);
 
-  /* Selected peer (required for chat) */
+  /* Selected peer */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
 
   /* Send */
@@ -110,7 +110,7 @@ export default function App() {
     [text, selectedPeer, refreshChain]
   );
 
-  /* Alias rename flow */
+  /* Alias Rename Flow */
   const needsAlias =
     identity?.alias?.startsWith('Anon-') ||
     !identity?.alias ||
@@ -126,7 +126,7 @@ export default function App() {
       const updated = await apiGetIdentity();
       setIdentity(updated);
       setShowAliasModal(false);
-      refreshPeers(); // network announce triggered by backend
+      refreshPeers();
     },
     [refreshPeers]
   );
@@ -141,9 +141,7 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="flex flex-col text-xs text-gray-400 text-right">
             <span className="font-medium text-gray-100">{identity?.alias ?? '(unknown alias)'}</span>
-            <span className="font-mono">
-              {myPub ? myPub.slice(0, 20) + '…' : '(no key)'}
-            </span>
+            <span className="font-mono">{myPub ? myPub.slice(0, 20) + '…' : '(no key)'}</span>
           </div>
           <button
             onClick={() => setShowAliasModal(true)}
@@ -168,11 +166,7 @@ export default function App() {
         <section className="flex-1 flex flex-col min-w-0">
           <div className="flex-1 overflow-y-auto">
             {selectedPeer ? (
-              <ChatView
-                blockchain={blockchain}
-                myPubkeyB64={myPub}
-                peerFilter={selectedPeer}
-              />
+              <ChatView blockchain={blockchain} myPubkeyB64={myPub} peerFilter={selectedPeer} />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-gray-500">
                 Select a peer to start chatting.
@@ -180,16 +174,11 @@ export default function App() {
             )}
           </div>
           {/* Input */}
-          <form
-            onSubmit={send}
-            className="p-2 border-t border-gray-800 flex gap-2"
-          >
+          <form onSubmit={send} className="p-2 border-t border-gray-800 flex gap-2">
             <input
               type="text"
               className="flex-1 px-3 py-2 rounded-md bg-gray-800 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder={
-                selectedPeer ? 'Type message…' : 'Select a peer to enable chat…'
-              }
+              placeholder={selectedPeer ? 'Type message…' : 'Select a peer to enable chat…'}
               value={text}
               onChange={(e) => setText(e.target.value)}
               disabled={sending || !selectedPeer}
@@ -206,10 +195,7 @@ export default function App() {
       </div>
 
       {showAliasModal && (
-        <AliasModal
-          initial={identity?.alias ?? ''}
-          onSubmit={applyAlias}
-        />
+        <AliasModal initial={identity?.alias ?? ''} onSubmit={applyAlias} />
       )}
     </div>
   );

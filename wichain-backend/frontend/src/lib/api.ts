@@ -9,15 +9,6 @@ export interface PeerInfo {
   last_seen_ms?: number;
 }
 
-export interface SignedMessage {
-  id: string;
-  from: string;
-  to?: string | null;
-  timestamp_ms: number;
-  content: string;
-  sig: string;
-}
-
 export interface Block {
   index: number;
   timestamp_ms: number;
@@ -84,7 +75,7 @@ export async function apiGetIdentity(): Promise<Identity> {
 }
 
 export async function apiSetAlias(alias: string): Promise<void> {
-  await invoke('set_alias', { newAlias: alias });
+  await invoke('set_alias', { new_alias: alias });
 }
 
 export async function apiGetPeers(): Promise<PeerInfo[]> {
@@ -110,7 +101,7 @@ export async function apiGetBlockchain(): Promise<Blockchain> {
 /** Direct message (peer required). */
 export async function apiAddMessage(text: string, toPeerId: string): Promise<boolean> {
   try {
-    await invoke<string>('add_text_message', { content: text, toPeer: toPeerId });
+    await invoke<string>('add_text_message', { content: text, to_peer: toPeerId });
     return true;
   } catch (err) {
     console.error('add_text_message failed', err);
