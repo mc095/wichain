@@ -43,6 +43,7 @@ function messageMatchesTarget(
   groups: GroupInfo[],
 ): boolean {
   if (!target) return false;
+  if (!myPub) return false; // cannot match without identity
 
   if (target.kind === 'peer') {
     const peer = target.id;
@@ -56,7 +57,7 @@ function messageMatchesTarget(
     const gid = target.id;
     // group messages have `to = gid`
     if (m.to !== gid) return false;
-    // optional sanity: ensure we are a member of gid
+    // sanity: ensure we are a member of gid
     const g = groups.find((gr) => gr.id === gid);
     if (!g) return false;
     if (!g.members.includes(myPub)) return false;
@@ -72,6 +73,7 @@ function buildItems(
   aliasMap: Record<string, string>,
   groups: GroupInfo[],
 ): ChatItem[] {
+  if (!myPub) return [];
   const filtered = messages.filter((m) =>
     messageMatchesTarget(m, myPub, target, groups),
   );
@@ -105,10 +107,12 @@ export function ChatView({
   aliasMap,
   groups,
 }: Props) {
+  // If identity not yet loaded, nothing meaningful to show.
+  const safeMyPub = myPubkeyB64 ?? '';
+
   const chatItems = useMemo(
-    () =>
-      buildItems(messages, myPubkeyB64 ?? '', selectedTarget, aliasMap, groups),
-    [messages, myPubkeyB64, selectedTarget, aliasMap, groups],
+    () => buildItems(messages, safeMyPub, selectedTarget, aliasMap, groups),
+    [messages, safeMyPub, selectedTarget, aliasMap, groups],
   );
 
   const endRef = useRef<HTMLDivElement>(null);
@@ -139,9 +143,11 @@ export function ChatView({
             }`}
             title={new Date(c.ts).toLocaleString()}
           >
-            {!c.mine && (
+            {/* In group chats, always show sender alias. In peer chats, show only if not mine. */}
+            {(c.isGroup || !c.mine) && (
               <div className="mb-0.5 text-xs opacity-80">
                 {c.fromAlias}
+                {c.isGroup ? ' · grp' : ''}
               </div>
             )}
             {c.text}

@@ -38,6 +38,7 @@ export function PeerList({
           )}
           {peers.map((p) => {
             const sel = selected?.kind === 'peer' && selected.id === p.id;
+            const label = p.alias || p.id.slice(0, 8) + '…';
             return (
               <li key={p.id}>
                 <button
@@ -47,8 +48,9 @@ export function PeerList({
                       : 'bg-neutral-800 text-neutral-100 hover:bg-neutral-700'
                   }`}
                   onClick={() => onSelectPeer(p.id)}
+                  title={label}
                 >
-                  {p.alias || p.id.slice(0, 8) + '…'}
+                  {label}
                 </button>
               </li>
             );
@@ -96,7 +98,7 @@ export function PeerList({
 function groupLabel(
   g: GroupInfo,
   aliasMap: Record<string, string>,
-  myPub: string
+  myPub: string,
 ): string {
   const names = g.members
     .filter((m) => m !== myPub)
@@ -111,9 +113,13 @@ function groupLabel(
 function groupTooltip(
   g: GroupInfo,
   aliasMap: Record<string, string>,
-  myPub: string
+  myPub: string,
 ): string {
   return g.members
-    .map((m) => (m === myPub ? '(you) ' + (aliasMap[m] ?? m.slice(0, 8) + '…') : aliasMap[m] ?? m.slice(0, 8) + '…'))
+    .map((m) =>
+      m === myPub
+        ? `(you) ${aliasMap[m] ?? m.slice(0, 8) + '…'}`
+        : aliasMap[m] ?? m.slice(0, 8) + '…',
+    )
     .join(', ');
 }

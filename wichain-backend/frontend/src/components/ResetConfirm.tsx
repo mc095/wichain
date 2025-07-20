@@ -1,19 +1,22 @@
 // frontend/src/components/ResetConfirm.tsx
 interface Props {
   open: boolean;
-  what?: string;
+  label: string; // Changed from 'what'
+  body: string;  // Added this prop
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-export function ResetConfirm({ open, what, onCancel, onConfirm }: Props) {
+export function ResetConfirm({ open, label, body, onCancel, onConfirm }: Props) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
       <div className="w-80 rounded-lg bg-neutral-900 p-4 shadow-lg">
-        <h2 className="mb-2 text-lg font-bold text-red-400">Clear Chat History</h2>
+        {/* Use the 'label' prop for the heading */}
+        <h2 className="mb-2 text-lg font-bold text-red-400">{label}</h2>
+        {/* Use the 'body' prop for the paragraph content */}
         <p className="mb-4 text-sm text-neutral-300">
-          {what ?? 'This will delete all local chat history. Your device identity will be kept.'}
+          {body}
         </p>
         <div className="flex justify-end gap-2">
           <button

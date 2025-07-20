@@ -46,7 +46,6 @@ export default function App() {
     const id = await apiGetIdentity();
     setIdentity(id);
     if (id.alias.startsWith('Anon-')) {
-      // first run; show onboarding wizard
       setOnboarding(true);
     }
   }, []);
@@ -57,17 +56,32 @@ export default function App() {
 
   // React to alias changes from backend
   useEffect(() => {
-    const un = listen('alias_update', loadIdentity);
+    const un = listen('alias_update', () => {
+      loadIdentity();
+      refreshGroups(); // update group labels when aliases change
+    });
     return () => {
       un.then((f) => f());
     };
-  }, [loadIdentity]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // deliberately empty; loadIdentity captured safely
 
   /* ---------------- Peers ---------------- */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
+  const [target, setTarget] = useState<Target>(null); // declare before refreshPeers so closure sees setter
+
   const refreshPeers = useCallback(() => {
-    apiGetPeers().then(setPeers).catch(console.error);
+    apiGetPeers()
+      .then((p) => {
+        setPeers(p);
+        // If selected peer disappeared, clear selection
+        setTarget((t) =>
+          t?.kind === 'peer' && !p.some((peer) => peer.id === t.id) ? null : t,
+        );
+      })
+      .catch(console.error);
   }, []);
+
   useEffect(() => {
     refreshPeers();
     const unlistenPromise = listen('peer_update', refreshPeers);
@@ -81,9 +95,18 @@ export default function App() {
   /* ---------------- Groups ---------------- */
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const refreshGroups = useCallback(() => {
-    apiListGroups().then(setGroups).catch(console.error);
+    apiListGroups()
+      .then((gs) => {
+        setGroups(gs);
+        // If selected group no longer exists, clear
+        setTarget((t) =>
+          t?.kind === 'group' && !gs.some((g) => g.id === t.id) ? null : t,
+        );
+      })
+      .catch(console.error);
   }, []);
-  // groups are not currently evented; we refresh on alias_update and after group changes
+
+  // initial load
   useEffect(() => {
     refreshGroups();
   }, [refreshGroups]);
@@ -103,15 +126,16 @@ export default function App() {
     };
   }, [refreshMessages]);
 
-  /* ---------------- Selected target ---------------- */
-  const [target, setTarget] = useState<Target>(null);
-
   /* ---------------- Compose / Send ---------------- */
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
     if (!msg || !target) return;
+    if (!identity) {
+      console.warn('Send aborted: identity not yet loaded.');
+      return;
+    }
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
@@ -123,8 +147,10 @@ export default function App() {
     if (ok) {
       setText('');
       refreshMessages();
+    } else {
+      console.warn('Send failed (see backend log).');
     }
-  }, [text, target, refreshMessages]);
+  }, [text, target, identity, refreshMessages]);
 
   /* ---------------- Reset chat only ---------------- */
   const [resetOpen, setResetOpen] = useState(false);
@@ -148,7 +174,6 @@ export default function App() {
   const openGroupModal = () => setGroupModalOpen(true);
   const closeGroupModal = () => setGroupModalOpen(false);
   const createGroup = async (memberIds: string[]) => {
-    // Must include self:
     const myPub = identity?.public_key_b64;
     if (!myPub) return;
     const full = Array.from(new Set([myPub, ...memberIds]));
@@ -160,7 +185,6 @@ export default function App() {
   };
 
   /* ---------------- Derived maps ---------------- */
-
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
 
@@ -219,7 +243,7 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-64 border-r border-neutral-800 p-2 overflow-y-auto">
+        <aside className="w-64 overflow-y-auto border-r border-neutral-800 p-2">
           <PeerList
             peers={displayedPeers}
             groups={groups}
@@ -274,8 +298,8 @@ export default function App() {
         open={resetOpen}
         onCancel={() => setResetOpen(false)}
         onConfirm={doReset}
-        // label="Reset Chat" // Removed to fix TypeScript error
-        // body="This will clear your local chat history. Your device identity will be preserved." // Removed to fix TypeScript error
+        label="Reset Chat"
+        body="This will clear your local chat history. Your device identity will be preserved."
       />
       <GroupModal
         open={groupModalOpen}
@@ -295,7 +319,7 @@ export default function App() {
 function groupDisplayName(
   g: GroupInfo,
   aliasMap: Record<string, string>,
-  myPub: string
+  myPub: string,
 ): string {
   // Show up to 3 aliases (excluding self), then "+N".
   const names = g.members
