@@ -1,37 +1,13 @@
 // frontend/src/lib/api.ts
+// ------------------------------------------------------------------
+// WiChain frontend API bindings for Tauri backend (AES + Groups build)
+// ------------------------------------------------------------------
+
 import { invoke } from '@tauri-apps/api/core';
 
 /* ------------------------------------------------------------------ */
-/* Types mirrored from backend                                        */
+/* Backend-mirrored types                                             */
 /* ------------------------------------------------------------------ */
-
-export interface PeerInfo {
-  id: string;          // pubkey b64
-  alias: string;
-  pubkey: string;      // redundant (same as id in current backend)
-  last_seen_ms?: number;
-}
-
-export interface ChatBody {
-  from: string;
-  to?: string | null;
-  text: string;
-  ts_ms: number;
-}
-
-/** Minimal “block” so ChatView can keep working (synthetic). */
-export interface Block {
-  index: number;
-  timestamp_ms: number;
-  previous_hash: string;
-  nonce: number;
-  hash: string;
-  data?: string;     // ChatBody JSON
-}
-
-export interface Blockchain {
-  chain: Block[];
-}
 
 export interface Identity {
   alias: string;
@@ -39,8 +15,34 @@ export interface Identity {
   public_key_b64: string;
 }
 
+export interface PeerInfo {
+  id: string;      // pubkey b64
+  alias: string;
+  pubkey: string;  // duplicate: same as id in our build (kept for compat)
+  last_seen_ms?: number;
+}
+
+/**
+ * Logical chat payload used throughout the app.
+ * - `to` is peer pubkey (for 1:1) OR group_id (for groups).
+ */
+export interface ChatBody {
+  from: string;
+  to?: string | null;
+  text: string;
+  ts_ms: number;
+}
+
+/**
+ * In-memory group info (not persisted); backend will re-create on request.
+ */
+export interface GroupInfo {
+  id: string;           // stable hash (hex) from sorted members
+  members: string[];    // pubkey b64 (includes self)
+}
+
 /* ------------------------------------------------------------------ */
-/* API Calls                                                          */
+/* Identity                                                           */
 /* ------------------------------------------------------------------ */
 
 export async function apiGetIdentity(): Promise<Identity> {
@@ -57,6 +59,10 @@ export async function apiSetAlias(newAlias: string): Promise<boolean> {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Peers                                                              */
+/* ------------------------------------------------------------------ */
+
 export async function apiGetPeers(): Promise<PeerInfo[]> {
   try {
     const peers = await invoke<PeerInfo[]>('get_peers');
@@ -67,41 +73,47 @@ export async function apiGetPeers(): Promise<PeerInfo[]> {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Groups                                                             */
+/* ------------------------------------------------------------------ */
+
 /**
- * Fetch chat history (Vec<ChatBody>) from backend and expose as a synthetic Blockchain.
- * This replaces reading the full on‑disk blockchain and lets the backend do filtering.
+ * Create (or get existing) group. Backend expects *all* members, including self.
+ * Returns the computed group_id (hex string).
  */
-export async function apiGetBlockchain(): Promise<Blockchain> {
+export async function apiCreateGroup(members: string[]): Promise<string | null> {
   try {
-    const msgs = await invoke<ChatBody[]>('get_chat_history');
-    const chain: Block[] = msgs.map((msg, idx) => ({
-      index: idx,
-      timestamp_ms: msg.ts_ms ?? Date.now(),
-      previous_hash: idx === 0 ? '0' : String(idx - 1),
-      nonce: 0,
-      hash: String(idx),
-      data: JSON.stringify(msg),
-    }));
-    return { chain };
+    const id = await invoke<string>('create_group', { members });
+    return id;
   } catch (err) {
-    console.error('apiGetBlockchain failed', err);
-    return { chain: [] };
+    console.error('create_group failed', err);
+    return null;
   }
 }
 
-/** Send chat message. Peer *must* be selected; backend rejects null. */
-export async function apiAddMessage(
-  text: string,
-  toPeerId: string,
-): Promise<boolean> {
-  if (!toPeerId) {
-    console.warn('apiAddMessage called without peerId; ignoring');
-    return false;
+/** List all in-memory groups known to backend. */
+export async function apiListGroups(): Promise<GroupInfo[]> {
+  try {
+    return await invoke<GroupInfo[]>('list_groups');
+  } catch (err) {
+    console.error('list_groups failed', err);
+    return [];
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat                                                               */
+/* ------------------------------------------------------------------ */
+
+/** Send *peer* message (must give a peer id). */
+export async function apiAddPeerMessage(
+  text: string,
+  peerId: string,
+): Promise<boolean> {
   try {
     await invoke('add_chat_message', {
       content: text,
-      toPeer: toPeerId, // backend Option<String>
+      toPeer: peerId,
     });
     return true;
   } catch (err) {
@@ -110,7 +122,38 @@ export async function apiAddMessage(
   }
 }
 
-/** Clear chat history (identity preserved). */
+/** Send *group* message. */
+export async function apiAddGroupMessage(
+  text: string,
+  groupId: string,
+): Promise<boolean> {
+  try {
+    await invoke('add_group_message', {
+      content: text,
+      groupId,
+    });
+    return true;
+  } catch (err) {
+    console.error('add_group_message failed', err);
+    return false;
+  }
+}
+
+/** Pull *all* chats we have locally (backend already filters by membership). */
+export async function apiGetChatHistory(): Promise<ChatBody[]> {
+  try {
+    return await invoke<ChatBody[]>('get_chat_history');
+  } catch (err) {
+    console.error('get_chat_history failed', err);
+    return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reset                                                              */
+/* ------------------------------------------------------------------ */
+
+/** Reset chat only (identity preserved). */
 export async function apiResetData(): Promise<boolean> {
   try {
     await invoke('reset_data');

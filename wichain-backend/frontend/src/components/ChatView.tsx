@@ -1,113 +1,114 @@
 // frontend/src/components/ChatView.tsx
 import { useMemo, useRef, useEffect } from 'react';
-import type { Blockchain, Block, ChatBody } from '../lib/api';
+import type { ChatBody, GroupInfo } from '../lib/api';
+
+/* ------------------------------------------------------------------ */
+/* Types                                                               */
+/* ------------------------------------------------------------------ */
+
+type Target =
+  | { kind: 'peer'; id: string }
+  | { kind: 'group'; id: string }
+  | null;
 
 interface Props {
-  blockchain: Blockchain;
+  messages: ChatBody[];
   myPubkeyB64?: string;
-  peerFilter?: string | null;
+  selectedTarget: Target;
+  aliasMap: Record<string, string>;
+  groups: GroupInfo[];
 }
 
+/** Flattened UI item */
 interface ChatItem {
   key: string;
   from: string;
+  fromAlias: string;
   to?: string | null;
   text: string;
   ts: number;
   mine: boolean;
+  isGroup: boolean;
 }
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                            */
+/* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-// Define an interface for the expected structure of the parsed JSON object
-interface ChatSignedPartial {
-  from?: string;
-  to?: string | null;
-  text?: string;
-  ts_ms?: number;
+/** True if this message belongs in the selected conversation. */
+function messageMatchesTarget(
+  m: ChatBody,
+  myPub: string,
+  target: Target,
+  groups: GroupInfo[],
+): boolean {
+  if (!target) return false;
+
+  if (target.kind === 'peer') {
+    const peer = target.id;
+    // one-to-one: either direction
+    return (
+      (m.from === myPub && m.to === peer) ||
+      (m.from === peer && m.to === myPub)
+    );
+  } else {
+    // group
+    const gid = target.id;
+    // group messages have `to = gid`
+    if (m.to !== gid) return false;
+    // optional sanity: ensure we are a member of gid
+    const g = groups.find((gr) => gr.id === gid);
+    if (!g) return false;
+    if (!g.members.includes(myPub)) return false;
+    return true;
+  }
 }
 
-/** Parse a block's JSON string into ChatBody (best effort). */
-function parseBody(data: string, fallbackTs: number): ChatBody {
-  try {
-    // ChatSigned is flattened; we only care about from/to/text/ts_ms fields.
-    const obj: ChatSignedPartial = JSON.parse(data); // Specify the type here
-    const from = typeof obj.from === 'string' ? obj.from : 'unknown';
-    const to =
-      typeof obj.to === 'string'
-        ? obj.to
-        : obj.to === null || obj.to === undefined
-        ? null
-        : undefined;
-    const text = typeof obj.text === 'string' ? obj.text : data;
-    const ts_ms =
-      typeof obj.ts_ms === 'number' ? obj.ts_ms : fallbackTs;
-    return { from, to, text, ts_ms };
-  } catch {
+/** Convert ChatBody[] -> ChatItem[] filtered & sorted. */
+function buildItems(
+  messages: ChatBody[],
+  myPub: string,
+  target: Target,
+  aliasMap: Record<string, string>,
+  groups: GroupInfo[],
+): ChatItem[] {
+  const filtered = messages.filter((m) =>
+    messageMatchesTarget(m, myPub, target, groups),
+  );
+  filtered.sort((a, b) => a.ts_ms - b.ts_ms);
+  return filtered.map((m, idx) => {
+    const mine = m.from === myPub;
+    const fromAlias = aliasMap[m.from] ?? m.from.slice(0, 10) + '…';
+    const isGroup =
+      !!m.to && groups.some((g) => g.id === m.to && g.members.includes(myPub));
     return {
-      from: 'unknown',
-      to: null,
-      text: data,
-      ts_ms: fallbackTs,
+      key: `${idx}:${m.ts_ms}`,
+      from: m.from,
+      fromAlias,
+      to: m.to ?? null,
+      text: m.text,
+      ts: m.ts_ms,
+      mine,
+      isGroup,
     };
-  }
-}
-
-/** Pull chat item from pseudo‑block; returns empty if not in the current peer filter. */
-function itemsFromBlock(
-  b: Block,
-  myPub?: string,
-  filter?: string | null
-): ChatItem[] {
-  const out: ChatItem[] = [];
-  const ts = b.timestamp_ms ?? 0;
-  if (!b.data) return out;
-  const body = parseBody(b.data, ts);
-
-  // Filter: only show convo between me and selected peer.
-  if (filter) {
-    const isMyOutgoing = body.from === myPub && body.to === filter;
-    const isMyIncoming = body.from === filter && body.to === myPub;
-    if (!isMyOutgoing && !isMyIncoming) {
-      return out;
-    }
-  }
-
-  out.push({
-    key: `${b.index}:${b.hash ?? b.timestamp_ms}`,
-    from: body.from,
-    to: body.to ?? null,
-    text: body.text,
-    ts: body.ts_ms ?? ts,
-    mine: !!myPub && body.from === myPub,
   });
-  return out;
-}
-
-/** Flatten all blocks into a sorted chat transcript. */
-function extractChatItems(
-  bc: Blockchain,
-  myPub?: string,
-  filter?: string | null
-): ChatItem[] {
-  const list: ChatItem[] = [];
-  for (const b of bc.chain) {
-    list.push(...itemsFromBlock(b, myPub, filter));
-  }
-  list.sort((a, b) => a.ts - b.ts);
-  return list;
 }
 
 /* ------------------------------------------------------------------ */
-/* Component                                                          */
+/* Component                                                           */
 /* ------------------------------------------------------------------ */
 
-export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
+export function ChatView({
+  messages,
+  myPubkeyB64,
+  selectedTarget,
+  aliasMap,
+  groups,
+}: Props) {
   const chatItems = useMemo(
-    () => extractChatItems(blockchain, myPubkeyB64, peerFilter),
-    [blockchain, myPubkeyB64, peerFilter]
+    () =>
+      buildItems(messages, myPubkeyB64 ?? '', selectedTarget, aliasMap, groups),
+    [messages, myPubkeyB64, selectedTarget, aliasMap, groups],
   );
 
   const endRef = useRef<HTMLDivElement>(null);
@@ -115,10 +116,10 @@ export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatItems.length]);
 
-  if (!peerFilter) {
+  if (!selectedTarget) {
     return (
       <div className="flex flex-1 items-center justify-center text-neutral-500">
-        Select a peer to start chatting.
+        Select a peer or group to start chatting.
       </div>
     );
   }
@@ -140,7 +141,7 @@ export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
           >
             {!c.mine && (
               <div className="mb-0.5 text-xs opacity-80">
-                {c.from.slice(0, 10)}…
+                {c.fromAlias}
               </div>
             )}
             {c.text}

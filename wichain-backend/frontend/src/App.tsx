@@ -1,22 +1,41 @@
 // frontend/src/App.tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import './App.css';
 import {
   apiGetIdentity,
-  apiGetPeers,
-  apiGetBlockchain,
-  apiAddMessage,
   apiSetAlias,
+  apiGetPeers,
+  apiGetChatHistory,
+  apiAddPeerMessage,
+  apiAddGroupMessage,
   apiResetData,
+  apiCreateGroup,
+  apiListGroups,
   type Identity,
   type PeerInfo,
-  type Blockchain,
+  type ChatBody,
+  type GroupInfo,
 } from './lib/api';
+
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
+import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
+
+/* ------------------------------------------------------------------ */
+/* Selection model                                                    */
+/* ------------------------------------------------------------------ */
+
+type Target =
+  | { kind: 'peer'; id: string }
+  | { kind: 'group'; id: string }
+  | null;
+
+/* ------------------------------------------------------------------ */
+/* Component                                                          */
+/* ------------------------------------------------------------------ */
 
 export default function App() {
   /* ---------------- Identity ---------------- */
@@ -27,6 +46,7 @@ export default function App() {
     const id = await apiGetIdentity();
     setIdentity(id);
     if (id.alias.startsWith('Anon-')) {
+      // first run; show onboarding wizard
       setOnboarding(true);
     }
   }, []);
@@ -58,46 +78,61 @@ export default function App() {
     };
   }, [refreshPeers]);
 
+  /* ---------------- Groups ---------------- */
+  const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const refreshGroups = useCallback(() => {
+    apiListGroups().then(setGroups).catch(console.error);
+  }, []);
+  // groups are not currently evented; we refresh on alias_update and after group changes
+  useEffect(() => {
+    refreshGroups();
+  }, [refreshGroups]);
+
   /* ---------------- Chat History ---------------- */
-  const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
-  const refreshChain = useCallback(() => {
-    apiGetBlockchain().then(setBlockchain).catch(console.error);
+  const [messages, setMessages] = useState<ChatBody[]>([]);
+  const refreshMessages = useCallback(() => {
+    apiGetChatHistory().then(setMessages).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshChain();
-    const unlistenPromise = listen('chat_update', refreshChain);
-    const interval = setInterval(refreshChain, 5_000);
+    refreshMessages();
+    const unlistenPromise = listen('chat_update', refreshMessages);
+    const interval = setInterval(refreshMessages, 10_000);
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
     };
-  }, [refreshChain]);
+  }, [refreshMessages]);
 
-  /* ---------------- Selected peer ---------------- */
-  const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
+  /* ---------------- Selected target ---------------- */
+  const [target, setTarget] = useState<Target>(null);
 
   /* ---------------- Compose / Send ---------------- */
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
-    if (!msg || !selectedPeer) return;
+    if (!msg || !target) return;
     setSending(true);
-    const ok = await apiAddMessage(msg, selectedPeer);
+    let ok = false;
+    if (target.kind === 'peer') {
+      ok = await apiAddPeerMessage(msg, target.id);
+    } else if (target.kind === 'group') {
+      ok = await apiAddGroupMessage(msg, target.id);
+    }
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain();
+      refreshMessages();
     }
-  }, [text, selectedPeer, refreshChain]);
+  }, [text, target, refreshMessages]);
 
-  /* ---------------- Reset chat (history only) ---------------- */
+  /* ---------------- Reset chat only ---------------- */
   const [resetOpen, setResetOpen] = useState(false);
   async function doReset() {
     setResetOpen(false);
     const ok = await apiResetData();
     if (ok) {
-      refreshChain();
+      refreshMessages();
     }
   }
 
@@ -108,12 +143,53 @@ export default function App() {
     loadIdentity();
   }
 
+  /* ---------------- Group modal ---------------- */
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const openGroupModal = () => setGroupModalOpen(true);
+  const closeGroupModal = () => setGroupModalOpen(false);
+  const createGroup = async (memberIds: string[]) => {
+    // Must include self:
+    const myPub = identity?.public_key_b64;
+    if (!myPub) return;
+    const full = Array.from(new Set([myPub, ...memberIds]));
+    const gid = await apiCreateGroup(full);
+    if (gid) {
+      await refreshGroups();
+      setTarget({ kind: 'group', id: gid });
+    }
+  };
+
+  /* ---------------- Derived maps ---------------- */
+
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
 
-  // Filter out the current user from the peers list before passing to PeerList
+  /** map pubkey->alias (includes self) */
+  const aliasMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    if (identity) m[identity.public_key_b64] = identity.alias;
+    for (const p of peers) {
+      m[p.id] = p.alias;
+    }
+    return m;
+  }, [identity, peers]);
+
+  /** Filter out self from displayed peers. */
   const displayedPeers = peers.filter((p) => p.id !== myPub);
 
+  /* ---------------- Derived target label ---------------- */
+  const targetLabel = (() => {
+    if (!target) return 'Select a peer or group…';
+    if (target.kind === 'peer') {
+      return aliasMap[target.id] ?? target.id.slice(0, 8) + '…';
+    } else {
+      const g = groups.find((gr) => gr.id === target.id);
+      if (!g) return 'Group?';
+      return groupDisplayName(g, aliasMap, myPub);
+    }
+  })();
+
+  /* ---------------- Render ---------------- */
   return (
     <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
       {/* Header */}
@@ -127,9 +203,15 @@ export default function App() {
         <div className="flex items-center gap-2">
           <button
             className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+            onClick={openGroupModal}
+          >
+            New Group
+          </button>
+          <button
+            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
             onClick={() => setResetOpen(true)}
           >
-            Clear Chat
+            Reset Chat
           </button>
         </div>
       </header>
@@ -137,27 +219,31 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-56 border-r border-neutral-800 p-2">
+        <aside className="w-64 border-r border-neutral-800 p-2 overflow-y-auto">
           <PeerList
             peers={displayedPeers}
-            selected={selectedPeer}
-            onSelect={setSelectedPeer}
+            groups={groups}
+            aliasMap={aliasMap}
+            myPub={myPub}
+            selected={target}
+            onSelectPeer={(id) => setTarget({ kind: 'peer', id })}
+            onSelectGroup={(id) => setTarget({ kind: 'group', id })}
           />
         </aside>
 
         {/* Chat */}
         <section className="flex flex-1 flex-col">
           <ChatView
-            blockchain={blockchain}
+            messages={messages}
             myPubkeyB64={myPub}
-            peerFilter={selectedPeer}
+            selectedTarget={target}
+            aliasMap={aliasMap}
+            groups={groups}
           />
           <div className="flex items-center gap-2 border-t border-neutral-800 p-2">
             <input
               type="text"
-              placeholder={
-                selectedPeer ? 'Type a message…' : 'Select a peer to start chatting'
-              }
+              placeholder={targetLabel}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => {
@@ -166,13 +252,13 @@ export default function App() {
                   send();
                 }
               }}
-              disabled={sending || !selectedPeer}
-              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none disabled:opacity-40"
+              disabled={sending || !target}
+              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
             />
             <button
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
               onClick={send}
-              disabled={sending || !text.trim() || !selectedPeer}
+              disabled={sending || !text.trim() || !target}
             >
               Send
             </button>
@@ -182,17 +268,42 @@ export default function App() {
 
       {/* Overlays */}
       {onboarding && identity && (
-        <Onboarding
-          initialAlias={identity.alias}
-          onDone={onboardingDone}
-        />
+        <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
       )}
       <ResetConfirm
         open={resetOpen}
         onCancel={() => setResetOpen(false)}
         onConfirm={doReset}
-        what="Clear all chat history? Your device identity will be kept."
+        // label="Reset Chat" // Removed to fix TypeScript error
+        // body="This will clear your local chat history. Your device identity will be preserved." // Removed to fix TypeScript error
+      />
+      <GroupModal
+        open={groupModalOpen}
+        onClose={closeGroupModal}
+        peers={displayedPeers}
+        aliasMap={aliasMap}
+        onCreateGroup={createGroup}
       />
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilities                                                          */
+/* ------------------------------------------------------------------ */
+
+function groupDisplayName(
+  g: GroupInfo,
+  aliasMap: Record<string, string>,
+  myPub: string
+): string {
+  // Show up to 3 aliases (excluding self), then "+N".
+  const names = g.members
+    .filter((m) => m !== myPub)
+    .map((m) => aliasMap[m] ?? m.slice(0, 8) + '…');
+  if (names.length === 0) return 'Just Me';
+  if (names.length === 1) return `You + ${names[0]}`;
+  if (names.length === 2) return `${names[0]}, ${names[1]}, You`;
+  if (names.length === 3) return `${names[0]}, ${names[1]}, +1`;
+  return `${names[0]}, ${names[1]}, +${names.length - 2}`;
 }
