@@ -42,6 +42,8 @@ use sha3::{Digest, Sha3_256};
 use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
+
+
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
 
@@ -142,7 +144,7 @@ pub struct AppState {
 /// Peer key derivation: stable ordering so both sides match.
 fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    let mut hasher = Sha3_256::new();
+    let mut hasher = Sha3_256::default(); 
     hasher.update(lo.as_bytes());
     hasher.update(b"|");
     hasher.update(hi.as_bytes());
