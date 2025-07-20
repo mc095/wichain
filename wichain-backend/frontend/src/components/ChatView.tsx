@@ -35,7 +35,6 @@ interface ChatItem {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-/** True if this message belongs in the selected conversation. */
 function messageMatchesTarget(
   m: ChatBody,
   myPub: string,
@@ -43,29 +42,25 @@ function messageMatchesTarget(
   groups: GroupInfo[],
 ): boolean {
   if (!target) return false;
-  if (!myPub) return false; // cannot match without identity
+
+  // If we don't yet know our pubkey, show nothing rather than drop into weird state.
+  if (!myPub) return false;
 
   if (target.kind === 'peer') {
     const peer = target.id;
-    // one-to-one: either direction
     return (
       (m.from === myPub && m.to === peer) ||
       (m.from === peer && m.to === myPub)
     );
   } else {
-    // group
     const gid = target.id;
-    // group messages have `to = gid`
     if (m.to !== gid) return false;
-    // sanity: ensure we are a member of gid
     const g = groups.find((gr) => gr.id === gid);
     if (!g) return false;
-    if (!g.members.includes(myPub)) return false;
-    return true;
+    return g.members.includes(myPub);
   }
 }
 
-/** Convert ChatBody[] -> ChatItem[] filtered & sorted. */
 function buildItems(
   messages: ChatBody[],
   myPub: string,
@@ -107,7 +102,6 @@ export function ChatView({
   aliasMap,
   groups,
 }: Props) {
-  // If identity not yet loaded, nothing meaningful to show.
   const safeMyPub = myPubkeyB64 ?? '';
 
   const chatItems = useMemo(
@@ -143,7 +137,6 @@ export function ChatView({
             }`}
             title={new Date(c.ts).toLocaleString()}
           >
-            {/* In group chats, always show sender alias. In peer chats, show only if not mine. */}
             {(c.isGroup || !c.mine) && (
               <div className="mb-0.5 text-xs opacity-80">
                 {c.fromAlias}

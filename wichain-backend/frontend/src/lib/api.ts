@@ -112,6 +112,10 @@ export async function apiAddPeerMessage(
   peerId: string,
 ): Promise<boolean> {
   try {
+    if (!peerId?.trim()) {
+      console.warn('apiAddPeerMessage: empty peerId');
+      return false;
+    }
     // backend params: content, to_peer
     await invoke('add_chat_message', {
       content: text,
@@ -130,6 +134,10 @@ export async function apiAddGroupMessage(
   groupId: string,
 ): Promise<boolean> {
   try {
+    if (!groupId?.trim()) {
+      console.warn('apiAddGroupMessage: empty groupId');
+      return false;
+    }
     // backend params: content, group_id
     await invoke('add_group_message', {
       content: text,

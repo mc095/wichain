@@ -54,9 +54,13 @@ export default function App() {
     loadIdentity();
   }, [loadIdentity]);
 
+  /* ---------------- Target ---------------- */
+  const [target, setTarget] = useState<Target>(null);
+
   // React to alias changes from backend
   useEffect(() => {
     const un = listen('alias_update', () => {
+      console.log('alias_update event');
       loadIdentity();
       refreshGroups(); // update group labels when aliases change
     });
@@ -64,12 +68,10 @@ export default function App() {
       un.then((f) => f());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // deliberately empty; loadIdentity captured safely
+  }, []);
 
   /* ---------------- Peers ---------------- */
   const [peers, setPeers] = useState<PeerInfo[]>([]);
-  const [target, setTarget] = useState<Target>(null); // declare before refreshPeers so closure sees setter
-
   const refreshPeers = useCallback(() => {
     apiGetPeers()
       .then((p) => {
@@ -84,7 +86,10 @@ export default function App() {
 
   useEffect(() => {
     refreshPeers();
-    const unlistenPromise = listen('peer_update', refreshPeers);
+    const unlistenPromise = listen('peer_update', () => {
+      console.log('peer_update event');
+      refreshPeers();
+    });
     const interval = setInterval(refreshPeers, 5_000);
     return () => {
       clearInterval(interval);
@@ -118,7 +123,10 @@ export default function App() {
   }, []);
   useEffect(() => {
     refreshMessages();
-    const unlistenPromise = listen('chat_update', refreshMessages);
+    const unlistenPromise = listen('chat_update', () => {
+      console.log('chat_update event');
+      refreshMessages();
+    });
     const interval = setInterval(refreshMessages, 10_000);
     return () => {
       clearInterval(interval);
@@ -131,11 +139,15 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
-    if (!msg || !target) return;
+    if (!msg || !target) {
+      console.warn('send(): no message or no target');
+      return;
+    }
     if (!identity) {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
+    console.log('send(): sending', { msg, target });
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
@@ -250,8 +262,14 @@ export default function App() {
             aliasMap={aliasMap}
             myPub={myPub}
             selected={target}
-            onSelectPeer={(id) => setTarget({ kind: 'peer', id })}
-            onSelectGroup={(id) => setTarget({ kind: 'group', id })}
+            onSelectPeer={(id) => {
+              console.log('Peer selected:', id);
+              setTarget({ kind: 'peer', id });
+            }}
+            onSelectGroup={(id) => {
+              console.log('Group selected:', id);
+              setTarget({ kind: 'group', id });
+            }}
           />
         </aside>
 
@@ -265,29 +283,28 @@ export default function App() {
             groups={groups}
           />
           <div className="flex items-center gap-2 border-t border-neutral-800 p-2">
-  <input
-    type="text"
-    placeholder={target ? targetLabel : "Select a peer or group to start"}
-    value={text}
-    onChange={(e) => setText(e.target.value)}
-    onKeyDown={(e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
-    }}
-    disabled={sending || !target || !identity}
-    className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
-  />
-  <button
-    className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-    onClick={send}
-    disabled={sending || !text.trim() || !target || !identity}
-  >
-    Send
-  </button>
-</div>
-
+            <input
+              type="text"
+              placeholder={target ? targetLabel : 'Select a peer or group to start'}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              disabled={sending || !target || !identity}
+              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
+            />
+            <button
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+              onClick={send}
+              disabled={sending || !text.trim() || !target || !identity}
+            >
+              Send
+            </button>
+          </div>
         </section>
       </div>
 
