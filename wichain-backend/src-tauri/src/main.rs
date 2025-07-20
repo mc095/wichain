@@ -1,36 +1,27 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-//! WiChain Tauri backend – *direct LAN chat edition* (signed, **unencrypted demo mode**).
+//! WiChain Tauri backend – *direct LAN, signed cleartext demo* (no broadcast, no group mode).
 //!
-//! ### What this build does
-//! - Direct peer messaging over UDP; no full‑chain broadcast sync.
-//! - Every outbound message is packaged as a canonical [`ChatBody`] and signed
-//!   with the device's Ed25519 key → [`ChatSigned`].
-//! - The **signed JSON is sent in the clear** (no encryption) and appended
-//!   verbatim to the local blockchain for a tamper‑evident log.
-//! - On receive: we parse `ChatSigned`, verify signature (best effort), then
-//!   append the *received* JSON to our chain. If parsing or verify fails, we
-//!   wrap the text in an unsigned `ChatSigned` with empty `sig_b64`.
-//! - Device alias can be changed live; peers discover over LAN broadcast.
-//! - Live “Reset Data” regenerates identity + clears chain.
+//! ### This build
+//! - **Direct only:** You *must* choose a peer; no broadcast / group send paths.
+//! - **Signed messages:** Every outbound chat is serialized as [`ChatBody`] then signed
+//!   with this device's Ed25519 key → [`ChatSigned`].
+//! - **Clear transport:** Signed JSON is sent in the clear over UDP for maximum
+//!   interoperability across mixed builds. (Encryption can be re‑enabled later.)
+//! - **Tamper‑evident log:** Received or sent messages are appended verbatim to a local
+//!   blockchain file. (On startup we *do not* auto‑wipe; use Reset Chat in UI.)
+//! - **Alias hot‑update:** Update alias live; we re‑announce on LAN.
+//! - **Reset chat only:** Command wipes *blockchain* and emits `reset_done` but keeps identity.
 //!
-//! ### Events emitted to UI
-//! - `peer_update` – peer list changed
-//! - `chat_update` – new chat appended
-//! - `alias_update` – alias changed
-//! - `reset_done` – local data wiped/recreated
+//! ### Events to UI
+//! `peer_update`, `chat_update`, `alias_update`, `reset_done`.
 //!
-//! ### Commands exposed to UI
-//! - `get_identity()`
-//! - `set_alias(new_alias: String)`
-//! - `get_peers()`
-//! - `add_chat_message(content: String, to_peer: Option<String>)`
-//! - `get_chat_history()`
-//! - `reset_data()`
-//
-// NOTE: This file intentionally **removes encryption** to restore cleartext
-// chat interoperability across mixed/legacy devices. When you're ready to
-// re‑enable E2EE, we can reintroduce the ChaCha20Poly1305+X25519 path.
+//! ### Commands
+//! `get_identity`, `set_alias`, `get_peers`, `add_chat_message`, `get_chat_history`, `reset_data`.
+//!
+//! ### Security Note
+//! Messages are *signed* but *not encrypted* in this build. Anyone on the LAN
+//! can read them, but tampering is detectable (if you check signatures).
 
 use std::{
     fs,
@@ -67,7 +58,7 @@ pub struct StoredIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatBody {
     pub from: String,        // sender pubkey b64
-    pub to: Option<String>,  // receiver pubkey b64; None => group/all
+    pub to: Option<String>,  // receiver pubkey b64
     pub text: String,        // UTF‑8
     pub ts_ms: u128,         // unix ms
 }
@@ -110,7 +101,7 @@ impl ChatSigned {
 }
 
 /// ---- application state -----------------------------------------------------
-/// `signing_key` wrapped in `Arc<Mutex<...>>` so we can replace it on live reset.
+/// Both identity & signing key sit behind Mutex so we can update live (alias / reset chat).
 pub struct AppState {
     pub app: AppHandle,
     pub identity: Arc<Mutex<StoredIdentity>>,
@@ -166,12 +157,12 @@ fn main() {
                         bc
                     }
                     Err(e) => {
-                        warn!("⚠ Failed to load blockchain ({e}); creating new.");
+                        warn!("⚠ Failed to load blockchain ({e}); starting empty.");
                         Blockchain::new()
                     }
                 }
             } else {
-                info!("ℹ No blockchain found; creating new.");
+                info!("ℹ No blockchain found; starting empty.");
                 Blockchain::new()
             };
             let blockchain = Arc::new(Mutex::new(blockchain));
@@ -229,7 +220,7 @@ fn main() {
                                 .await;
                             }
                             NetworkMessage::Block { .. } => {
-                                // Legacy full-chain broadcast ignored in new direct-chat flow.
+                                // Legacy (ignored; broadcast removed in this build).
                             }
                             NetworkMessage::Peer { .. }
                             | NetworkMessage::Ping { .. }
@@ -269,7 +260,7 @@ fn main() {
 }
 
 // -----------------------------------------------------------------------------
-// helpers: identity load / save
+// identity load / save
 // -----------------------------------------------------------------------------
 fn load_or_create_identity(path: &Path) -> StoredIdentity {
     if let Ok(data) = fs::read_to_string(path) {
@@ -343,21 +334,26 @@ async fn handle_incoming_network_payload(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
     blockchain_path: &Path,
-    _my_pub_b64: &str,
+    my_pub_b64: &str,
     from_pub_b64: &str,
     to_pub_b64: &str,
     payload_str: &str,
 ) {
+    // Ignore any traffic not destined to us (belt & suspenders).
+    if to_pub_b64 != my_pub_b64 {
+        return;
+    }
+
     // 1. Try parse ChatSigned directly.
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(payload_str) {
         // best-effort verify
         if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(from_pub_b64.as_bytes()) {
             if sender_pub_bytes.len() == 32 {
-                if let Ok(vk) = VerifyingKey::from_bytes(
-                    <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
-                ) {
+                if let Ok(vk) =
+                    VerifyingKey::from_bytes(sender_pub_bytes.as_slice().try_into().unwrap())
+                {
                     if !chat_signed.verify(&vk) {
-                        warn!("Inbound chat signature invalid (from peer). Recording anyway.");
+                        warn!("Inbound chat signature invalid (peer={})", &from_pub_b64[..8]);
                     }
                 }
             }
@@ -378,7 +374,7 @@ async fn handle_incoming_network_payload(
         return;
     }
 
-    // 3. Plain text fallback (legacy old builds / unknown formats).
+    // 3. Plain text fallback (very old builds / unknown formats).
     let chat = ChatSigned {
         body: ChatBody {
             from: from_pub_b64.to_string(),
@@ -445,13 +441,18 @@ async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, S
     Ok(peers.into_iter().filter(|p| p.id != my_id).collect())
 }
 
-/// Add chat message (to one peer or all peers).
+/// Add chat message (peer‑to‑peer only; broadcast disabled).
 #[tauri::command]
 async fn add_chat_message(
     state: tauri::State<'_, AppState>,
     content: String,
     to_peer: Option<String>,
 ) -> Result<(), String> {
+    let peer_id = match to_peer {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => return Err("peer required".into()),
+    };
+
     let (my_pub, my_sk) = {
         let id = state.identity.lock().await;
         (id.public_key_b64.clone(), Arc::clone(&state.signing_key))
@@ -460,7 +461,7 @@ async fn add_chat_message(
     // canonical body
     let body = ChatBody {
         from: my_pub.clone(),
-        to: to_peer.clone(),
+        to: Some(peer_id.clone()),
         text: content.clone(),
         ts_ms: now_ms(),
     };
@@ -468,60 +469,60 @@ async fn add_chat_message(
     let my_sk_locked = my_sk.lock().await;
     let chat_signed = ChatSigned::new_signed(body, &*my_sk_locked);
     drop(my_sk_locked);
-    let clear_json = serde_json::to_string(&chat_signed).map_err(|e| e.to_string())?;
+    let msg_json = serde_json::to_string(&chat_signed).map_err(|e| e.to_string())?;
 
-    // append locally (store clear signed JSON)
+    // append locally
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(clear_json.clone());
+        chain.add_text_block(msg_json.clone());
         if let Err(e) = chain.save_to_file(&state.blockchain_path) {
             return Err(format!("save error: {e}"));
         }
     }
     let _ = state.app.emit("chat_update", ());
 
-    // send
-    match to_peer {
-        Some(peer_id) => {
-            if let Err(e) = state.node.send_direct_block(&peer_id, clear_json.clone()).await {
-                warn!("send_direct_block error: {e}");
-            }
-        }
-        None => {
-            // send to all
-            let peers = state.node.list_peers().await;
-            for p in peers {
-                if let Err(e) = state.node.send_direct_block(&p.id, clear_json.clone()).await {
-                    warn!("group send error -> {}: {e}", p.id);
-                }
-            }
-        }
+    // send (single peer only)
+    if let Err(e) = state.node.send_direct_block(&peer_id, msg_json).await {
+        warn!("send_direct_block error -> {}: {e}", peer_id);
     }
+
     Ok(())
 }
 
-/// Fetch all chat payloads (parsed) for UI.
-/// We return simplified `ChatBody` list (drop sig) for UI convenience.
+/// Fetch all chat payloads we have locally (simplified to `ChatBody` for UI).
 #[tauri::command]
 async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatBody>, String> {
+    let my_pub = {
+        let id = state.identity.lock().await;
+        id.public_key_b64.clone()
+    };
     let chain = state.blockchain.lock().await;
     let mut out = Vec::new();
     for b in &chain.chain {
+        // Blocks hold JSON `ChatSigned` (preferred) or possibly `ChatBody` (legacy).
         if let Ok(signed) = serde_json::from_str::<ChatSigned>(&b.data) {
-            out.push(signed.body);
-        } else if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
-            out.push(body);
+            // keep only conversations we are part of
+            if signed.body.from == my_pub
+                || signed.body.to.as_deref() == Some(&my_pub)
+            {
+                out.push(signed.body);
+            }
+            continue;
+        }
+        if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
+            if body.from == my_pub || body.to.as_deref() == Some(&my_pub) {
+                out.push(body);
+            }
         }
     }
     Ok(out)
 }
 
-/// Reset data: wipe state + generate new identity live.
+/// Reset chat *only* (clear blockchain; keep identity).
 #[tauri::command]
 async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // Remove files
+    // Remove blockchain file
     let _ = fs::remove_file(&state.blockchain_path);
-    let _ = fs::remove_file(&state.identity_path);
 
     // Reset blockchain in memory
     {
@@ -532,24 +533,8 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Generate a new identity
-    let new_id = regenerate_identity(&state.identity_path);
-    let new_signing_key = decode_signing_key(&new_id)
-        .map_err(|e| format!("failed to decode new key: {e}"))?;
-
-    {
-        let mut id = state.identity.lock().await;
-        *id = new_id.clone();
-    }
-    {
-        let mut sk = state.signing_key.lock().await;
-        *sk = new_signing_key;
-    }
-
-    // Update node alias + announce
-    state.node.set_alias(new_id.alias.clone()).await;
-
-    warn!("Local WiChain data reset live (new alias: {}).", new_id.alias);
-    let _ = state.app.emit("reset_done", new_id);
+    // Identity untouched.
+    warn!("Local WiChain chat history cleared; identity preserved.");
+    let _ = state.app.emit("reset_done", ());
     Ok(())
 }

@@ -17,7 +17,6 @@ import { ChatView } from './components/ChatView';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export default function App() {
   /* ---------------- Identity ---------------- */
@@ -28,7 +27,6 @@ export default function App() {
     const id = await apiGetIdentity();
     setIdentity(id);
     if (id.alias.startsWith('Anon-')) {
-      // first run; show onboarding wizard
       setOnboarding(true);
     }
   }, []);
@@ -60,7 +58,7 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  /* ---------------- Blockchain / Chat ---------------- */
+  /* ---------------- Chat History ---------------- */
   const [blockchain, setBlockchain] = useState<Blockchain>({ chain: [] });
   const refreshChain = useCallback(() => {
     apiGetBlockchain().then(setBlockchain).catch(console.error);
@@ -68,24 +66,12 @@ export default function App() {
   useEffect(() => {
     refreshChain();
     const unlistenPromise = listen('chat_update', refreshChain);
-    const interval = setInterval(refreshChain, 5_000); // tighter since per-message
+    const interval = setInterval(refreshChain, 5_000);
     return () => {
       clearInterval(interval);
       unlistenPromise.then((un) => un());
     };
   }, [refreshChain]);
-
-  // Listen for reset_done event and refresh identity/blockchain
-  useEffect(() => {
-    const unlisten = listen('reset_done', async () => {
-      const newId = await apiGetIdentity();
-      setIdentity(newId);
-      const newChain = await apiGetBlockchain();
-      setBlockchain(newChain);
-    });
-    return () => { unlisten.then((f) => f()); };
-  }, []); // Empty dependency array as it only needs to set up the listener once
-
 
   /* ---------------- Selected peer ---------------- */
   const [selectedPeer, setSelectedPeer] = useState<string | null>(null);
@@ -95,26 +81,23 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
-    if (!msg) return;
+    if (!msg || !selectedPeer) return;
     setSending(true);
     const ok = await apiAddMessage(msg, selectedPeer);
     setSending(false);
     if (ok) {
       setText('');
-      refreshChain(); // optimistic
+      refreshChain();
     }
   }, [text, selectedPeer, refreshChain]);
 
-  /* ---------------- Reset data ---------------- */
+  /* ---------------- Reset chat (history only) ---------------- */
   const [resetOpen, setResetOpen] = useState(false);
   async function doReset() {
     setResetOpen(false);
     const ok = await apiResetData();
     if (ok) {
-      // reload the app; new identity will be generated
-      const current = getCurrentWindow();
-      await current.hide();
-      window.location.reload();
+      refreshChain();
     }
   }
 
@@ -128,7 +111,7 @@ export default function App() {
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
 
-  // Remove self from displayed peers
+  // Filter out the current user from the peers list before passing to PeerList
   const displayedPeers = peers.filter((p) => p.id !== myPub);
 
   return (
@@ -146,7 +129,7 @@ export default function App() {
             className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
             onClick={() => setResetOpen(true)}
           >
-            Reset Data
+            Clear Chat
           </button>
         </div>
       </header>
@@ -154,12 +137,11 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-52 border-r border-neutral-800 p-2">
+        <aside className="w-56 border-r border-neutral-800 p-2">
           <PeerList
             peers={displayedPeers}
             selected={selectedPeer}
             onSelect={setSelectedPeer}
-            // onFindPeers={refreshPeers} // This prop is not defined in PeerList component
           />
         </aside>
 
@@ -174,7 +156,7 @@ export default function App() {
             <input
               type="text"
               placeholder={
-                selectedPeer ? 'Message peer…' : 'Message everyone on LAN…'
+                selectedPeer ? 'Type a message…' : 'Select a peer to start chatting'
               }
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -184,13 +166,13 @@ export default function App() {
                   send();
                 }
               }}
-              disabled={sending}
-              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
+              disabled={sending || !selectedPeer}
+              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none disabled:opacity-40"
             />
             <button
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
               onClick={send}
-              disabled={sending || !text.trim()}
+              disabled={sending || !text.trim() || !selectedPeer}
             >
               Send
             </button>
@@ -200,12 +182,16 @@ export default function App() {
 
       {/* Overlays */}
       {onboarding && identity && (
-        <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
+        <Onboarding
+          initialAlias={identity.alias}
+          onDone={onboardingDone}
+        />
       )}
       <ResetConfirm
         open={resetOpen}
         onCancel={() => setResetOpen(false)}
         onConfirm={doReset}
+        what="Clear all chat history? Your device identity will be kept."
       />
     </div>
   );

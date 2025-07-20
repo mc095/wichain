@@ -4,31 +4,29 @@ import { invoke } from '@tauri-apps/api/core';
 /* ------------------------------------------------------------------ */
 /* Types mirrored from backend                                        */
 /* ------------------------------------------------------------------ */
+
 export interface PeerInfo {
-  id: string;
+  id: string;          // pubkey b64
   alias: string;
-  pubkey: string;
+  pubkey: string;      // redundant (same as id in current backend)
   last_seen_ms?: number;
 }
 
-/** Canonical chat body used by UI. */
-export interface ChatPayloadV1 {
-  from: string;           // sender pubkey b64
-  to?: string | null;     // receiver pubkey b64; null => group/all
+export interface ChatBody {
+  from: string;
+  to?: string | null;
   text: string;
-  ts_ms: number;          // unix ms
+  ts_ms: number;
 }
 
-/** Minimal block shape used by ChatView (synthetic). */
+/** Minimal “block” so ChatView can keep working (synthetic). */
 export interface Block {
   index: number;
   timestamp_ms: number;
   previous_hash: string;
   nonce: number;
   hash: string;
-  data?: string;     // JSON ChatPayloadV1 string
-  raw_data?: string; // legacy fallback (unused in synthetic path)
-  payload?: unknown;
+  data?: string;     // ChatBody JSON
 }
 
 export interface Blockchain {
@@ -60,17 +58,22 @@ export async function apiSetAlias(newAlias: string): Promise<boolean> {
 }
 
 export async function apiGetPeers(): Promise<PeerInfo[]> {
-  const peers = await invoke<PeerInfo[]>('get_peers');
-  return peers ?? [];
+  try {
+    const peers = await invoke<PeerInfo[]>('get_peers');
+    return peers ?? [];
+  } catch (err) {
+    console.error('get_peers failed', err);
+    return [];
+  }
 }
 
 /**
- * High‑level chat history from backend.
- * We synthesize a pseudo‑blockchain that ChatView already knows how to render.
+ * Fetch chat history (Vec<ChatBody>) from backend and expose as a synthetic Blockchain.
+ * This replaces reading the full on‑disk blockchain and lets the backend do filtering.
  */
 export async function apiGetBlockchain(): Promise<Blockchain> {
   try {
-    const msgs = await invoke<ChatPayloadV1[]>('get_chat_history');
+    const msgs = await invoke<ChatBody[]>('get_chat_history');
     const chain: Block[] = msgs.map((msg, idx) => ({
       index: idx,
       timestamp_ms: msg.ts_ms ?? Date.now(),
@@ -86,15 +89,19 @@ export async function apiGetBlockchain(): Promise<Blockchain> {
   }
 }
 
-/** Send chat message. If `toPeerId` omitted => group/all. */
+/** Send chat message. Peer *must* be selected; backend rejects null. */
 export async function apiAddMessage(
   text: string,
-  toPeerId?: string | null
+  toPeerId: string,
 ): Promise<boolean> {
+  if (!toPeerId) {
+    console.warn('apiAddMessage called without peerId; ignoring');
+    return false;
+  }
   try {
     await invoke('add_chat_message', {
       content: text,
-      toPeer: toPeerId ?? null,
+      toPeer: toPeerId, // backend Option<String>
     });
     return true;
   } catch (err) {
@@ -103,6 +110,7 @@ export async function apiAddMessage(
   }
 }
 
+/** Clear chat history (identity preserved). */
 export async function apiResetData(): Promise<boolean> {
   try {
     await invoke('reset_data');

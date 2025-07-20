@@ -1,6 +1,6 @@
 // frontend/src/components/ChatView.tsx
 import { useMemo, useRef, useEffect } from 'react';
-import type { Blockchain, Block, ChatPayloadV1 } from '../lib/api';
+import type { Blockchain, Block, ChatBody } from '../lib/api';
 
 interface Props {
   blockchain: Blockchain;
@@ -21,48 +21,41 @@ interface ChatItem {
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Parse a block's string payload into ChatPayloadV1 (best effort). */
-function parsePayload(data: string, fallbackTs: number): ChatPayloadV1 {
-  // Preferred: JSON ChatPayloadV1
-  try {
-    const p = JSON.parse(data) as Partial<ChatPayloadV1>;
-    if (p && typeof p.text === 'string' && typeof p.from === 'string') {
-      return {
-        from: p.from,
-        to: p.to ?? null,
-        text: p.text,
-        ts_ms: p.ts_ms ?? fallbackTs,
-      };
-    }
-  } catch {
-    /* ignore */
-  }
-
-  // Legacy inline tag: @peer:<id>:::<text>
-  const tag = '@peer:';
-  if (data.startsWith(tag)) {
-    const rest = data.slice(tag.length);
-    const sep = rest.indexOf(':::');
-    if (sep >= 0) {
-      return {
-        from: 'unknown',
-        to: rest.slice(0, sep),
-        text: rest.slice(sep + 3),
-        ts_ms: fallbackTs,
-      };
-    }
-  }
-
-  // Plain broadcast text fallback
-  return {
-    from: 'unknown',
-    to: null,
-    text: data,
-    ts_ms: fallbackTs,
-  };
+// Define an interface for the expected structure of the parsed JSON object
+interface ChatSignedPartial {
+  from?: string;
+  to?: string | null;
+  text?: string;
+  ts_ms?: number;
 }
 
-/** Pull chat items out of one pseudo‑block. */
+/** Parse a block's JSON string into ChatBody (best effort). */
+function parseBody(data: string, fallbackTs: number): ChatBody {
+  try {
+    // ChatSigned is flattened; we only care about from/to/text/ts_ms fields.
+    const obj: ChatSignedPartial = JSON.parse(data); // Specify the type here
+    const from = typeof obj.from === 'string' ? obj.from : 'unknown';
+    const to =
+      typeof obj.to === 'string'
+        ? obj.to
+        : obj.to === null || obj.to === undefined
+        ? null
+        : undefined;
+    const text = typeof obj.text === 'string' ? obj.text : data;
+    const ts_ms =
+      typeof obj.ts_ms === 'number' ? obj.ts_ms : fallbackTs;
+    return { from, to, text, ts_ms };
+  } catch {
+    return {
+      from: 'unknown',
+      to: null,
+      text: data,
+      ts_ms: fallbackTs,
+    };
+  }
+}
+
+/** Pull chat item from pseudo‑block; returns empty if not in the current peer filter. */
 function itemsFromBlock(
   b: Block,
   myPub?: string,
@@ -70,23 +63,25 @@ function itemsFromBlock(
 ): ChatItem[] {
   const out: ChatItem[] = [];
   const ts = b.timestamp_ms ?? 0;
-  const raw = b.data ?? b.raw_data ?? '';
-  if (!raw) return out;
+  if (!b.data) return out;
+  const body = parseBody(b.data, ts);
 
-  const payload = parsePayload(raw, ts);
+  // Filter: only show convo between me and selected peer.
   if (filter) {
-    if (payload.to !== filter && payload.from !== filter) {
+    const isMyOutgoing = body.from === myPub && body.to === filter;
+    const isMyIncoming = body.from === filter && body.to === myPub;
+    if (!isMyOutgoing && !isMyIncoming) {
       return out;
     }
   }
 
   out.push({
     key: `${b.index}:${b.hash ?? b.timestamp_ms}`,
-    from: payload.from,
-    to: payload.to ?? null,
-    text: payload.text,
-    ts: payload.ts_ms ?? ts,
-    mine: !!myPub && payload.from === myPub,
+    from: body.from,
+    to: body.to ?? null,
+    text: body.text,
+    ts: body.ts_ms ?? ts,
+    mine: !!myPub && body.from === myPub,
   });
   return out;
 }
@@ -106,7 +101,7 @@ function extractChatItems(
 }
 
 /* ------------------------------------------------------------------ */
-/* Component                                                           */
+/* Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
@@ -119,6 +114,14 @@ export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatItems.length]);
+
+  if (!peerFilter) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-neutral-500">
+        Select a peer to start chatting.
+      </div>
+    );
+  }
 
   return (
     <div className="chat-view flex-1 overflow-y-auto p-4">
@@ -138,7 +141,6 @@ export function ChatView({ blockchain, myPubkeyB64, peerFilter }: Props) {
             {!c.mine && (
               <div className="mb-0.5 text-xs opacity-80">
                 {c.from.slice(0, 10)}…
-                {c.to ? `→${c.to.slice(0, 8)}…` : ''}
               </div>
             )}
             {c.text}
