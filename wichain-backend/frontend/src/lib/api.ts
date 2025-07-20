@@ -37,8 +37,8 @@ export interface ChatBody {
  * In-memory group info (not persisted); backend will re-create on request.
  */
 export interface GroupInfo {
-  id: string;           // stable hash (hex) from sorted members
-  members: string[];    // pubkey b64 (includes self)
+  id: string;        // stable hash (hex) from sorted members
+  members: string[]; // pubkey b64 (includes self)
 }
 
 /* ------------------------------------------------------------------ */
@@ -51,7 +51,8 @@ export async function apiGetIdentity(): Promise<Identity> {
 
 export async function apiSetAlias(newAlias: string): Promise<boolean> {
   try {
-    await invoke('set_alias', { newAlias });
+    // backend param: new_alias
+    await invoke('set_alias', { new_alias: newAlias });
     return true;
   } catch (err) {
     console.error('set_alias failed', err);
@@ -111,9 +112,10 @@ export async function apiAddPeerMessage(
   peerId: string,
 ): Promise<boolean> {
   try {
+    // backend params: content, to_peer
     await invoke('add_chat_message', {
       content: text,
-      toPeer: peerId,
+      to_peer: peerId,
     });
     return true;
   } catch (err) {
@@ -128,9 +130,10 @@ export async function apiAddGroupMessage(
   groupId: string,
 ): Promise<boolean> {
   try {
+    // backend params: content, group_id
     await invoke('add_group_message', {
       content: text,
-      groupId,
+      group_id: groupId,
     });
     return true;
   } catch (err) {
