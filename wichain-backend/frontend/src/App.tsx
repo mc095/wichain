@@ -265,28 +265,29 @@ export default function App() {
             groups={groups}
           />
           <div className="flex items-center gap-2 border-t border-neutral-800 p-2">
-            <input
-              type="text"
-              placeholder={targetLabel}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              disabled={sending || !target}
-              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
-            />
-            <button
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-              onClick={send}
-              disabled={sending || !text.trim() || !target}
-            >
-              Send
-            </button>
-          </div>
+  <input
+    type="text"
+    placeholder={target ? targetLabel : "Select a peer or group to start"}
+    value={text}
+    onChange={(e) => setText(e.target.value)}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    }}
+    disabled={sending || !target || !identity}
+    className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
+  />
+  <button
+    className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+    onClick={send}
+    disabled={sending || !text.trim() || !target || !identity}
+  >
+    Send
+  </button>
+</div>
+
         </section>
       </div>
 
