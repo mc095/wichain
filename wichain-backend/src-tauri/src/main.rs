@@ -349,52 +349,48 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
 // -----------------------------------------------------------------------------
 // inbound network handler
 // -----------------------------------------------------------------------------
-async fn handle_incoming_network_payload(
-    app: &AppHandle,
-    blockchain: &Arc<Mutex<Blockchain>>,
-    blockchain_path: &Path,
-    my_pub_b64: &str,
-    network_from_b64: &str,
-    _network_to_b64: &str,
-    payload_str: &str,
-) {
-    // 0. Try direct deobfuscation with reported "from"
-    if let Some(clear_json) = simple_deobfuscate_json(my_pub_b64, network_from_b64, payload_str) {
-        if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear_json) {
-            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-            return;
-        }
-    }
 
-    // 1. Brute try deobfuscation with all peers (in case 'from' is wrong)
-    let peers = app.state::<AppState>().node.list_peers().await;
-    for p in peers {
-        if let Some(clear_json) = simple_deobfuscate_json(my_pub_b64, &p.id, payload_str) {
-            if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear_json) {
-                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
-                return;
-            }
-        }
-    }
 
-    // 2. Try if the payload is already clear ChatSigned JSON
-    if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(payload_str) {
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-        return;
+/// Clean an incoming payload string from the network before base64 decode.
+/// Strips leading/trailing whitespace, surrounding quotes, and the "[UNREADABLE] " prefix
+/// (in case we end up reprocessing blocks we stored locally).
+fn clean_transport_payload(s: &str) -> &str {
+    // trim whitespace
+    let mut trimmed = s.trim();
+    // strip JSON quotes if present
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        trimmed = &trimmed[1..trimmed.len() - 1];
     }
-
-    // 3. Fallback: wrap raw payload as plain text (force store as text)
-    let chat_signed = ChatSigned {
-        body: ChatBody {
-            from: network_from_b64.to_string(),
-            to: Some(my_pub_b64.to_string()),
-            text: format!("[UNREADABLE] {}", payload_str),
-            ts_ms: now_ms(),
-        },
-        sig_b64: String::new(),
-    };
-    record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
+    // strip our own "[UNREADABLE] " prefix
+    const PREF: &str = "[UNREADABLE] ";
+    if trimmed.starts_with(PREF) {
+        trimmed = &trimmed[PREF.len()..];
+        trimmed = trimmed.trim();
+    }
+    trimmed
 }
+
+
+
+/// Clean an incoming payload string from the network before base64 decode.
+/// Strips leading/trailing whitespace, surrounding quotes, and the "[UNREADABLE] " prefix
+/// (in case we end up reprocessing blocks we stored locally).
+fn clean_transport_payload(s: &str) -> &str {
+    // trim whitespace
+    let mut trimmed = s.trim();
+    // strip JSON quotes if present
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        trimmed = &trimmed[1..trimmed.len() - 1];
+    }
+    // strip our own "[UNREADABLE] " prefix
+    const PREF: &str = "[UNREADABLE] ";
+    if trimmed.starts_with(PREF) {
+        trimmed = &trimmed[PREF.len()..];
+        trimmed = trimmed.trim();
+    }
+    trimmed
+}
+
 
 
 // -----------------------------------------------------------------------------
