@@ -1,13 +1,13 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-//! WiChain Tauri backend – **direct LAN, AES‑confidential peer & group chat** (no broadcast).
+//! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ## This build
 //! - **Peer‑to‑peer only**; broadcast removed.
-//! - **Group chat**: encrypted copies sent individually (fan‑out) to each member.
-//! - **Confidentiality**: AES‑256‑GCM per‑peer and per‑group derived keys.
+//! - **Group chat**: obfuscated copies sent individually (fan‑out) to each member.
+//! - **Confidentiality**: SHA3‑512 XOR per‑peer and per‑group derived keys (obfuscation, not encryption).
 //! - **Authenticity**: Each plaintext [`ChatBody`] is Ed25519‑signed → [`ChatSigned`].
-//! - **Transport**: Signed JSON is encrypted before being sent over UDP.
+//! - **Transport**: Signed JSON is obfuscated (XOR+Base64) before being sent over UDP.
 //! - **Ledger**: Clear signed JSON appended locally (tamper‑evident blockchain file).
 //! - **Alias hot‑update**: Rename device live; peers discover via LAN.
 //! - **Reset chat only**: Clears blockchain; identity preserved.
@@ -18,12 +18,6 @@
 //! ## Commands
 //! `get_identity`, `set_alias`, `get_peers`, `add_chat_message`,
 //! `create_group`, `list_groups`, `add_group_message`, `get_chat_history`, `reset_data`.
-//!
-//! ## Demo Security Model
-//! - Shared AES keys derived deterministically (SHA3‑256) from peer pubkeys or sorted group member list (no forward secrecy).
-//! - Group membership included in each encrypted payload so receivers can derive key statelessly.
-//! - Ledger stores cleartext signed records for UI & auditing.
-//! - Signature verification best effort; message recorded even if verify fails (logged).
 
 use std::{
     fs,
@@ -31,18 +25,14 @@ use std::{
     sync::Arc,
 };
 
-use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
-use log::{info, warn};
-use rand::{rngs::OsRng, RngCore};
+use log::{debug, info, warn};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
-use sha3::{Digest, Sha3_256};
+use sha3::{Digest, Sha3_512};
 use tokio::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-
-
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
@@ -80,6 +70,46 @@ pub struct ChatSigned {
     pub sig_b64: String,
 }
 
+// -----------------------------------------------------------------------------
+// Lightweight SHA3-512 XOR "confidentiality" helpers
+// -----------------------------------------------------------------------------
+
+/// Derive a 64-byte mask from two pubkeys (sorted) using SHA3-512.
+fn simple_pair_mask(pub_a: &str, pub_b: &str) -> [u8; 64] {
+    let (lo, hi) = if pub_a <= pub_b { (pub_a, pub_b) } else { (pub_b, pub_a) };
+    let mut h = Sha3_512::default();
+    h.update(lo.as_bytes());
+    h.update(b"|");
+    h.update(hi.as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&digest[..]);
+    out
+}
+
+/// XOR data with repeating mask bytes.
+fn simple_xor(data: &[u8], mask: &[u8]) -> Vec<u8> {
+    data.iter()
+        .enumerate()
+        .map(|(i, b)| b ^ mask[i % mask.len()])
+        .collect()
+}
+
+/// Obfuscate clear JSON string → base64 string.
+fn simple_obfuscate_json(my_pub: &str, other_pub: &str, clear_json: &str) -> String {
+    let mask = simple_pair_mask(my_pub, other_pub);
+    let x = simple_xor(clear_json.as_bytes(), &mask);
+    general_purpose::STANDARD.encode(x)
+}
+
+/// Attempt to de‑obfuscate b64 string back to JSON.
+fn simple_deobfuscate_json(my_pub: &str, other_pub: &str, b64_payload: &str) -> Option<String> {
+    let bytes = general_purpose::STANDARD.decode(b64_payload.as_bytes()).ok()?;
+    let mask = simple_pair_mask(my_pub, other_pub);
+    let clear = simple_xor(&bytes, &mask);
+    String::from_utf8(clear).ok()
+}
+
 impl ChatSigned {
     pub fn new_signed(body: ChatBody, sk: &SigningKey) -> Self {
         let bytes = serde_json::to_vec(&body).expect("serialize body");
@@ -109,22 +139,6 @@ impl ChatSigned {
     }
 }
 
-/// Encrypted container sent over the network.
-///
-/// For **group** messages we include `group_members` so receivers can derive
-/// the same AES key statelessly (no local group registration required to decrypt).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatEncrypted {
-    pub from: String,                  // sender pubkey b64
-    pub to: Option<String>,            // peer pubkey OR group_id
-    pub nonce_b64: String,
-    pub ciphertext_b64: String,
-    pub ts_ms: u128,
-    pub is_group: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_members: Option<Vec<String>>, // required if is_group
-}
-
 /// ---- application state -----------------------------------------------------
 pub struct AppState {
     pub app: AppHandle,
@@ -136,97 +150,6 @@ pub struct AppState {
     pub blockchain_path: PathBuf,
     pub identity_path: PathBuf,
 }
-
-// -----------------------------------------------------------------------------
-// AES helpers
-// -----------------------------------------------------------------------------
-
-/// Peer key derivation: stable ordering so both sides match.
-fn decode_pubkey_32(s: &str) -> [u8; 32] {
-    let trimmed = s.trim().replace("\n", "").replace("\r", "");
-    log::debug!("decode_pubkey_32: input='{}'", trimmed);
-
-    if let Ok(bytes) = general_purpose::STANDARD.decode(trimmed.as_bytes()) {
-        log::debug!("  base64 decoded ({} bytes)={:02x?}", bytes.len(), bytes);
-        if bytes.len() == 32 {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&bytes);
-            return out;
-        }
-    }
-
-    log::warn!("  invalid key length, using SHA3 fallback");
-
-    let mut h = Sha3_256::default();
-    h.update(trimmed.as_bytes());
-    let digest = h.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    log::debug!("  fallback hashed key={:02x?}", out);
-    out
-}
-
-
-fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
-    let a_raw = decode_pubkey_32(a);
-    let b_raw = decode_pubkey_32(b);
-    let (lo, hi) = if a_raw <= b_raw { (a_raw, b_raw) } else { (b_raw, a_raw) };
-
-    log::debug!("derive_peer_aes_key: a={} b={}", a, b);
-    log::debug!("  a_raw={:02x?}", a_raw);
-    log::debug!("  b_raw={:02x?}", b_raw);
-
-    let mut hasher = Sha3_256::default();
-    hasher.update(lo);
-    hasher.update(b"|");
-    hasher.update(hi);
-
-    let digest = hasher.finalize();
-    let key = Key::<Aes256Gcm>::from_slice(&digest[..32]).to_owned();
-
-    log::debug!("  derived AES key={:02x?}", key);
-
-    key
-}
-
-
-
-fn encrypt_aes(plaintext: &[u8], key: &Key<Aes256Gcm>) -> (Vec<u8>, [u8; 12]) {
-    log::debug!("encrypt_aes: plaintext='{}' ({} bytes)", 
-        String::from_utf8_lossy(plaintext), plaintext.len());
-    log::debug!("  key={:02x?}", key);
-
-    let cipher = Aes256Gcm::new(key);
-    let mut nonce = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce);
-    log::debug!("  nonce={:02x?}", nonce);
-
-    let nonce_obj = Nonce::from_slice(&nonce);
-    let ct = cipher.encrypt(nonce_obj, plaintext).expect("encrypt");
-
-    log::debug!("  ciphertext={:02x?}", ct);
-
-    (ct, nonce)
-}
-
-
-fn decrypt_aes(ciphertext: &[u8], nonce: &[u8; 12], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, ()> {
-    log::debug!("decrypt_aes: ciphertext ({} bytes)={:02x?}", ciphertext.len(), ciphertext);
-    log::debug!("  nonce={:02x?}", nonce);
-    log::debug!("  key={:02x?}", key);
-
-    let cipher = Aes256Gcm::new(key);
-    let nonce_obj = Nonce::from_slice(nonce);
-    let result = cipher.decrypt(nonce_obj, ciphertext);
-
-    match &result {
-        Ok(clear) => log::debug!("  decrypted='{}'", String::from_utf8_lossy(clear)),
-        Err(_) => log::warn!("  decryption FAILED!"),
-    }
-
-    result.map_err(|_| ())
-}
-
 
 // -----------------------------------------------------------------------------
 // main
@@ -251,13 +174,14 @@ fn main() {
             let blockchain_path = data_dir.join(BLOCKCHAIN_FILE);
 
             // --- Identity ---------------------------------------------------------------
-            let identity_loaded = load_or_create_identity(&identity_path);
+            // Load & decode; regenerate if corrupt.
+            let mut identity_loaded = load_or_create_identity(&identity_path);
             let signing_key = match decode_signing_key(&identity_loaded) {
                 Ok(sk) => sk,
                 Err(e) => {
-                    warn!("Identity decode error ({e}); regenerating.");
-                    let regenerated = regenerate_identity(&identity_path);
-                    decode_signing_key(&regenerated).expect("fresh identity must decode")
+                    warn!("Identity decode error ({e}); regenerating fresh identity.");
+                    identity_loaded = regenerate_identity(&identity_path);
+                    decode_signing_key(&identity_loaded).expect("fresh identity must decode")
                 }
             };
             info!(
@@ -302,7 +226,7 @@ fn main() {
                 node_pubkey,
             ));
 
-            // spawn network loop
+            // Spawn network loop
             let (tx, mut rx) = tokio::sync::mpsc::channel::<NetworkMessage>(64);
             {
                 let node = node.clone();
@@ -353,8 +277,8 @@ fn main() {
                 });
             }
 
-            // --- Install state so commands can access it --------------------------------
-            let state = AppState {
+            // --- Install state ----------------------------------------------------------
+            app.manage(AppState {
                 app: app.handle().clone(),
                 identity,
                 signing_key,
@@ -363,8 +287,7 @@ fn main() {
                 groups,
                 blockchain_path,
                 identity_path,
-            };
-            app.manage(state);
+            });
 
             Ok(())
         })
@@ -382,6 +305,7 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("Error running WiChain");
 }
+
 
 // -----------------------------------------------------------------------------
 // identity load / save
@@ -403,11 +327,7 @@ fn regenerate_identity(path: &Path) -> StoredIdentity {
         general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
     let private_key_b64 = general_purpose::STANDARD.encode(signing_key.to_bytes());
 
-    let id = StoredIdentity {
-        alias,
-        public_key_b64,
-        private_key_b64,
-    };
+    let id = StoredIdentity { alias, public_key_b64, private_key_b64 };
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
         warn!("Failed to write identity.json: {e}");
     }
@@ -427,167 +347,39 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
 }
 
 // -----------------------------------------------------------------------------
-// chat append / persist helpers
-// -----------------------------------------------------------------------------
-fn now_ms() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default()
-}
-
-async fn append_chat_json(
-    app: &AppHandle,
-    blockchain: &Arc<Mutex<Blockchain>>,
-    blockchain_path: &Path,
-    chat_json: &str,
-) {
-    {
-        let mut chain = blockchain.lock().await;
-        chain.add_text_block(chat_json);
-        if let Err(e) = chain.save_to_file(blockchain_path) {
-            warn!("Failed saving chain after chat: {e}");
-        }
-    }
-    let _ = app.emit("chat_update", ());
-}
-
-// -----------------------------------------------------------------------------
 // inbound network handler
 // -----------------------------------------------------------------------------
-/// Expected formats (priority order):
-/// 1. `ChatEncrypted` JSON (AES ciphertext of `ChatSigned`).
-/// 2. `ChatSigned` JSON (legacy signed cleartext).
-/// 3. `ChatBody` JSON (legacy unsigned).
-/// 4. Raw text (very old builds).
-/// Expected formats (priority order):
-/// 1. `ChatEncrypted` JSON (AES ciphertext of `ChatSigned`).
-/// 2. `ChatSigned` JSON (legacy signed cleartext).
-/// 3. `ChatBody` JSON (legacy unsigned).
-/// 4. Raw text (very old builds).
 async fn handle_incoming_network_payload(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
     blockchain_path: &Path,
     my_pub_b64: &str,
     network_from_b64: &str,
-    network_to_b64: &str,
+    _network_to_b64: &str,
     payload_str: &str,
 ) {
-    log::debug!(
-        "INBOUND: from={} to={} my={} len={}",
-        &network_from_b64[..network_from_b64.len().min(12)],
-        &network_to_b64[..network_to_b64.len().min(12)],
-        &my_pub_b64[..my_pub_b64.len().min(12)],
-        payload_str.len()
-    );
-
-    // --- Try ChatEncrypted ---------------------------------------------------
-    match serde_json::from_str::<ChatEncrypted>(payload_str) {
-        Ok(enc) => {
-            log::debug!(
-                "INBOUND parsed ChatEncrypted: is_group={} from={} to={:?}",
-                enc.is_group,
-                &enc.from[..enc.from.len().min(12)],
-                enc.to.as_deref().map(|s| &s[..s.len().min(12)])
-            );
-
-            if enc.is_group {
-                if let Some(members) = enc.group_members.clone() {
-                    log::debug!(
-                        "INBOUND group msg: members={} (showing 1st={:?})",
-                        members.len(),
-                        members.first().map(|m| &m[..m.len().min(12)])
-                    );
-                    if !members.iter().any(|m| m == my_pub_b64) {
-                        log::debug!("INBOUND group msg: I'm not a member; ignoring.");
-                        return;
-                    }
-                    let key = GroupManager::compute_group_aes_key(&sorted_clone(&members));
-                    match decrypt_chat_encrypted(&enc, &key) {
-                        Some(clear_signed) => {
-                            log::debug!("INBOUND group msg: decrypt+parse OK; recording.");
-                            record_decrypted_chat(
-                                app,
-                                blockchain,
-                                blockchain_path,
-                                &clear_signed,
-                                network_from_b64,
-                            )
-                            .await;
-                        }
-                        None => {
-                            warn!("Failed to decrypt inbound group message.");
-                        }
-                    }
-                    return;
-                } else {
-                    warn!("Inbound group message missing members; ignoring.");
-                    return;
-                }
-            } else {
-                // Peer message
-                if let Some(ref to) = enc.to {
-                    if to != my_pub_b64 {
-                        log::debug!(
-                            "INBOUND peer msg: enc.to != my_pub ({} != {}); ignoring.",
-                            &to[..to.len().min(12)],
-                            &my_pub_b64[..my_pub_b64.len().min(12)]
-                        );
-                        return;
-                    }
-                } else {
-                    log::debug!("INBOUND peer msg: missing enc.to; ignoring.");
-                    return;
-                }
-                let key = derive_peer_aes_key(&enc.from, my_pub_b64);
-                match decrypt_chat_encrypted(&enc, &key) {
-                    Some(clear_signed) => {
-                        log::debug!("INBOUND peer msg: decrypt+parse OK; recording.");
-                        record_decrypted_chat(
-                            app,
-                            blockchain,
-                            blockchain_path,
-                            &clear_signed,
-                            network_from_b64,
-                        )
-                        .await;
-                    }
-                    None => {
-                        warn!("Failed to decrypt inbound peer message.");
-                    }
-                }
-                return;
-            }
-        }
-        Err(_) => {
-            // fall through to legacy attempts
+    // 0. Try SHA3-XOR deobfuscation
+    if let Some(clear_json) = simple_deobfuscate_json(my_pub_b64, network_from_b64, payload_str) {
+        if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear_json) {
+            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
+            return;
         }
     }
 
-    // --- Try ChatSigned ------------------------------------------------------
+    // 1. ChatSigned clear
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(payload_str) {
-        log::debug!("INBOUND fallback ChatSigned parsed OK; recording.");
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64)
-            .await;
+        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return;
     }
 
-    // --- Try ChatBody --------------------------------------------------------
+    // 2. ChatBody clear
     if let Ok(body) = serde_json::from_str::<ChatBody>(payload_str) {
-        log::debug!("INBOUND fallback ChatBody parsed OK; wrapping & recording.");
-        let chat_signed = ChatSigned {
-            body,
-            sig_b64: String::new(),
-        };
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64)
-            .await;
+        let chat_signed = ChatSigned { body, sig_b64: String::new() };
+        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return;
     }
 
-    // --- Raw fallback --------------------------------------------------------
-    log::debug!("INBOUND raw fallback; wrapping text len={}", payload_str.len());
+    // 3. Raw fallback
     let chat_signed = ChatSigned {
         body: ChatBody {
             from: network_from_b64.to_string(),
@@ -600,136 +392,41 @@ async fn handle_incoming_network_payload(
     record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
 }
 
-
-/// Utility: return a sorted clone (stable key derivation).
-fn sorted_clone(v: &[String]) -> Vec<String> {
-    let mut c = v.to_vec();
-    c.sort_unstable();
-    c
+// -----------------------------------------------------------------------------
+// chat persistence
+// -----------------------------------------------------------------------------
+fn now_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default()
 }
 
-/// Attempt to decrypt `ChatEncrypted` using provided key; returns `ChatSigned`.
-/// Attempt to decrypt `ChatEncrypted` using provided key; returns `ChatSigned`.
-fn decrypt_chat_encrypted(enc: &ChatEncrypted, key: &Key<Aes256Gcm>) -> Option<ChatSigned> {
-    log::debug!(
-        "decrypt_chat_encrypted: from={} to={:?} nonce_len={} ciphertext_len={}",
-        &enc.from[..enc.from.len().min(12)],
-        enc.to.as_deref().map(|s| &s[..s.len().min(12)]),
-        enc.nonce_b64.len(),
-        enc.ciphertext_b64.len()
-    );
-
-    let nonce_bytes_vec = match general_purpose::STANDARD.decode(&enc.nonce_b64) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("decrypt_chat_encrypted: nonce base64 decode error: {e}");
-            return None;
-        }
-    };
-    if nonce_bytes_vec.len() != 12 {
-        warn!("decrypt_chat_encrypted: nonce length {} != 12", nonce_bytes_vec.len());
-        return None;
-    }
-    let mut nonce_bytes = [0u8; 12];
-    nonce_bytes.copy_from_slice(&nonce_bytes_vec);
-
-    let ct_vec = match general_purpose::STANDARD.decode(&enc.ciphertext_b64) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("decrypt_chat_encrypted: ciphertext base64 decode error: {e}");
-            return None;
-        }
-    };
-
-    log::debug!("decrypt_chat_encrypted: key={:02x?}", key.as_ref() as &[u8]);
-    log::debug!("decrypt_chat_encrypted: nonce={:02x?}", nonce_bytes);
-    log::debug!("decrypt_chat_encrypted: ciphertext={:02x?}", &ct_vec[..ct_vec.len().min(32)]);
-
-    let clear = match decrypt_aes(&ct_vec, &nonce_bytes, key) {
-        Ok(v) => v,
-        Err(_) => {
-            warn!("decrypt_chat_encrypted: AES decrypt failed.");
-            return None;
-        }
-    };
-    log::debug!(
-        "decrypt_chat_encrypted: cleartext (first 100 bytes)={}",
-        String::from_utf8_lossy(&clear[..clear.len().min(100)])
-    );
-
-    match serde_json::from_slice::<ChatSigned>(&clear) {
-        Ok(cs) => {
-            log::debug!("decrypt_chat_encrypted: JSON parse OK (text_len={})", cs.body.text.len());
-            Some(cs)
-        }
-        Err(e) => {
-            warn!("decrypt_chat_encrypted: JSON parse error: {e}");
-            None
-        }
-    }
-}
-
-
-
-/// After decrypting inbound or preparing outbound, append **clear signed** JSON.
-/// After decrypting (or for legacy cleartext), append **clear signed** JSON to blockchain.
 async fn record_decrypted_chat(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
     blockchain_path: &Path,
     chat_signed: &ChatSigned,
-    network_from_b64: &str,
+    _network_from_b64: &str,
 ) {
-    log::debug!(
-        "record_decrypted_chat: body.from={} body.to={:?} net_from={}",
-        &chat_signed.body.from[..chat_signed.body.from.len().min(12)],
-        chat_signed
-            .body
-            .to
-            .as_deref()
-            .map(|s| &s[..s.len().min(12)]),
-        &network_from_b64[..network_from_b64.len().min(12)]
-    );
-
-    // Best‑effort signature verify (logs only)
-    if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&chat_signed.body.from) {
-        if sender_pub_bytes.len() == 32 {
-            if let Ok(vk) = VerifyingKey::from_bytes(
-                <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
-            ) {
-                if !chat_signed.verify(&vk) {
-                    warn!(
-                        "Chat signature INVALID (declared from={} net_from={}).",
-                        &chat_signed.body.from[..8.min(chat_signed.body.from.len())],
-                        &network_from_b64[..8.min(network_from_b64.len())]
-                    );
-                } else {
-                    log::debug!("record_decrypted_chat: signature OK.");
-                }
-            }
-        }
-    }
-
     let json = serde_json::to_string(chat_signed).unwrap();
-    append_chat_json(app, blockchain, blockchain_path, &json).await;
-    log::debug!("record_decrypted_chat: appended to blockchain ({} bytes).", json.len());
+    {
+        let mut chain = blockchain.lock().await;
+        chain.add_text_block(json.clone());
+        let _ = chain.save_to_file(blockchain_path);
+    }
+    let _ = app.emit("chat_update", ());
+    debug!("record_decrypted_chat: appended to blockchain ({} bytes).", json.len());
 }
-
 
 // -----------------------------------------------------------------------------
 // Tauri commands
 // -----------------------------------------------------------------------------
 #[tauri::command]
 async fn get_identity(state: tauri::State<'_, AppState>) -> Result<StoredIdentity, String> {
-    let id = state.identity.lock().await;
-    Ok(id.clone())
+    Ok(state.identity.lock().await.clone())
 }
 
 #[tauri::command]
-async fn set_alias(
-    state: tauri::State<'_, AppState>,
-    new_alias: String,
-) -> Result<(), String> {
+async fn set_alias(state: tauri::State<'_, AppState>, new_alias: String) -> Result<(), String> {
     let alias = new_alias.trim();
     if alias.is_empty() {
         return Err("alias empty".into());
@@ -738,186 +435,100 @@ async fn set_alias(
     {
         let mut id = state.identity.lock().await;
         id.alias = alias.to_string();
-        if let Err(e) =
-            fs::write(&state.identity_path, serde_json::to_string_pretty(&*id).unwrap())
-        {
-            return Err(format!("write identity: {e}"));
-        }
+        fs::write(&state.identity_path, serde_json::to_string_pretty(&*id).unwrap())
+            .map_err(|e| format!("write identity: {e}"))?;
     }
 
     state.node.set_alias(alias.to_string()).await;
-
     let _ = state.app.emit("alias_update", ());
-    info!("Alias changed to '{alias}' and network announce updated.");
     Ok(())
 }
 
 #[tauri::command]
 async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, String> {
     let peers = state.node.list_peers().await;
-    let my_id = {
-        let id = state.identity.lock().await;
-        id.public_key_b64.clone()
-    };
+    let my_id = state.identity.lock().await.public_key_b64.clone();
     Ok(peers.into_iter().filter(|p| p.id != my_id).collect())
 }
 
-/// Create (or return existing) group. Must include *all* members (including self).
-#[tauri::command]
-async fn create_group(
-    state: tauri::State<'_, AppState>,
-    members: Vec<String>,
-) -> Result<String, String> {
-    if members.is_empty() {
-        return Err("group needs at least 1 member".into());
-    }
-    let id = state.groups.create_group(members);
-    Ok(id)
-}
-
-/// List current in‑memory groups.
-#[tauri::command]
-async fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<GroupInfo>, String> {
-    Ok(state.groups.list_groups())
-}
-
-/// Add chat message (peer‑to‑peer only; broadcast disabled).
 #[tauri::command]
 async fn add_chat_message(
     state: tauri::State<'_, AppState>,
     content: String,
     to_peer: String,
 ) -> Result<(), String> {
-    // --- validate peer id ---------------------------------------------------
-    let peer_id_trim = to_peer.trim();
-    if peer_id_trim.is_empty() {
+    let peer_id = to_peer.trim();
+    if peer_id.is_empty() {
         return Err("peer required".into());
     }
-    let peer_id = peer_id_trim.to_string();
 
-    log::debug!(
-        "add_chat_message: to_peer={} content_len={}",
-        &peer_id[..peer_id.len().min(12)],
-        content.len()
-    );
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let my_sk = state.signing_key.lock().await.clone();
 
-    // --- snapshot my pubkey -------------------------------------------------
-    let my_pub = {
-        let id = state.identity.lock().await;
-        id.public_key_b64.clone()
-    };
-
-    // --- build + sign plaintext ---------------------------------------------
-    let chat_signed = {
-        let my_sk = state.signing_key.lock().await;
-        let body = ChatBody {
-            from: my_pub.clone(),
-            to: Some(peer_id.clone()),
-            text: content.clone(),
-            ts_ms: now_ms(),
-        };
-        ChatSigned::new_signed(body, &*my_sk)
-    };
-
-    // --- encrypt for peer ---------------------------------------------------
-    let key = derive_peer_aes_key(&my_pub, &peer_id);
-    let clear_json = serde_json::to_vec(&chat_signed).map_err(|e| e.to_string())?;
-    let (ct, nonce) = encrypt_aes(&clear_json, &key);
-
-    let enc = ChatEncrypted {
+    let body = ChatBody {
         from: my_pub.clone(),
-        to: Some(peer_id.clone()),
-        nonce_b64: general_purpose::STANDARD.encode(nonce),
-        ciphertext_b64: general_purpose::STANDARD.encode(ct),
-        ts_ms: chat_signed.body.ts_ms,
-        is_group: false,
-        group_members: None,
+        to: Some(peer_id.to_string()),
+        text: content.clone(),
+        ts_ms: now_ms(),
     };
-    let enc_json = serde_json::to_string(&enc).map_err(|e| e.to_string())?;
+    let chat_signed = ChatSigned::new_signed(body, &my_sk);
+    let clear_json = serde_json::to_string(&chat_signed).unwrap();
 
-    // --- append clear locally ------------------------------------------------
     {
         let mut chain = state.blockchain.lock().await;
-        let clear_str = String::from_utf8(clear_json).map_err(|e| e.to_string())?;
-        chain.add_text_block(clear_str);
-        if let Err(e) = chain.save_to_file(&state.blockchain_path) {
-            return Err(format!("save error: {e}"));
-        }
+        chain.add_text_block(clear_json.clone());
+        chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
 
-    // --- send encrypted to peer ---------------------------------------------
-    if let Err(e) = state.node.send_direct_block(&peer_id, enc_json).await {
-        warn!("send_direct_block error -> {}: {e}", peer_id);
-    }
-
+    let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
+    let _ = state.node.send_direct_block(peer_id, obf_b64).await;
     Ok(())
 }
 
+#[tauri::command]
+async fn create_group(state: tauri::State<'_, AppState>, members: Vec<String>) -> Result<String, String> {
+    if members.is_empty() {
+        return Err("group needs at least 1 member".into());
+    }
+    Ok(state.groups.create_group(members))
+}
 
-/// Send a *group* chat message* (fan‑out encrypted copies).
+#[tauri::command]
+async fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<GroupInfo>, String> {
+    Ok(state.groups.list_groups())
+}
+
 #[tauri::command]
 async fn add_group_message(
     state: tauri::State<'_, AppState>,
     content: String,
     group_id: String,
 ) -> Result<(), String> {
-    // fetch group
-    let group = match state.groups.get_group(&group_id) {
-        Some(g) => g,
-        None => return Err("unknown group".into()),
-    };
-    if group.members.is_empty() {
-        return Err("group empty".into());
-    }
-
-    let (my_pub, my_sk) = {
+    let group = state.groups.get_group(&group_id).ok_or("unknown group")?;
+    let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
-        (id.public_key_b64.clone(), state.signing_key.lock().await.clone())
+        let sk = state.signing_key.lock().await;
+        let body = ChatBody {
+            from: id.public_key_b64.clone(),
+            to: Some(group_id.clone()),
+            text: content.clone(),
+            ts_ms: now_ms(),
+        };
+        (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };
 
-    // canonical body: .to carries group_id
-    let body = ChatBody {
-        from: my_pub.clone(),
-        to: Some(group_id.clone()),
-        text: content.clone(),
-        ts_ms: now_ms(),
-    };
-    let chat_signed = ChatSigned::new_signed(body, &my_sk);
-
-    // prepare encrypted payload for the *group key* (stateless derivation)
-    let group_key = GroupManager::compute_group_aes_key(&group.members);
-    let clear_json = serde_json::to_vec(&chat_signed).map_err(|e| e.to_string())?;
-    let (ct, nonce) = encrypt_aes(&clear_json, &group_key);
-    let enc = ChatEncrypted {
-        from: my_pub.clone(),
-        to: Some(group_id.clone()),
-        nonce_b64: general_purpose::STANDARD.encode(nonce),
-        ciphertext_b64: general_purpose::STANDARD.encode(ct),
-        ts_ms: chat_signed.body.ts_ms,
-        is_group: true,
-        group_members: Some(group.members.clone()),
-    };
-    let enc_json = serde_json::to_string(&enc).map_err(|e| e.to_string())?;
-
-    // append clear (local)
+    let clear_json = serde_json::to_string(&chat_signed).unwrap();
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(String::from_utf8(clear_json.clone()).unwrap());
-        if let Err(e) = chain.save_to_file(&state.blockchain_path) {
-            return Err(format!("save error: {e}"));
-        }
+        chain.add_text_block(clear_json.clone());
+        chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
 
-    // fan‑out encrypted payload to each member
-    for member in &group.members {
-        if member == &my_pub {
-            continue;
-        }
-        if let Err(e) = state.node.send_direct_block(member, enc_json.clone()).await {
-            warn!("group send error -> {}: {e}", member);
-        }
+    for member in group.members.iter().filter(|m| *m != &my_pub) {
+        let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
+        let _ = state.node.send_direct_block(member, obf).await;
     }
 
     Ok(())
@@ -982,3 +593,5 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _ = state.app.emit("reset_done", ());
     Ok(())
 }
+
+

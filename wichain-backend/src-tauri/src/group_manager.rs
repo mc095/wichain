@@ -2,18 +2,16 @@
 //!
 //! Groups are *ephemeral* (not persisted). A group is identified by a
 //! deterministic ID derived from the **sorted list of member pubkeys**.
-//! That same sorted member list is also used to derive the **group AES key**.
 //!
-//! Because we include the `group_members` list in every encrypted group
-//! payload, a receiving node can decrypt even if it never explicitly
-//! registered the group locally (stateless decrypt). The registry is mainly
-//! used so *we* (the local node) can offer group selection UI and filter
-//! history.
+//! Transport "confidentiality" in the current build is **per‑member SHA3‑512 XOR
+//! obfuscation** that happens in `add_group_message` inside `main.rs`; we do *not*
+//! derive or store a persistent group key here. We *only* provide:
+//!   • deterministic group IDs
+//!   • membership tracking for UI / history filtering
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use aes_gcm::{Aes256Gcm, Key};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_256};
 
@@ -35,7 +33,7 @@ impl GroupManager {
         })
     }
 
-    /// Deterministic group id = hex(SHA3_256("gid|" + join(sorted_members,"|")))
+    /// Deterministic group id = hex(SHA3_256("gid|" + join(sorted_members,"|"))).
     fn compute_group_id(sorted_members: &[String]) -> String {
         let mut hasher = Sha3_256::new();
         hasher.update(b"gid|");
@@ -51,22 +49,7 @@ impl GroupManager {
         hex::encode(digest)
     }
 
-    /// Derive AES key from sorted member list (same bytes as id input, but no prefix).
-    pub fn compute_group_aes_key(sorted_members: &[String]) -> Key<Aes256Gcm> {
-        let mut hasher = Sha3_256::new();
-        let mut first = true;
-        for m in sorted_members {
-            if !first {
-                hasher.update(b"|");
-            }
-            hasher.update(m.as_bytes());
-            first = false;
-        }
-        let digest = hasher.finalize();
-        Key::<Aes256Gcm>::from_slice(&digest[..32]).clone()
-    }
-
-    /// Create or return existing group id for `members`.
+    /// Create or return existing group id for `members` (unsorted input OK).
     pub fn create_group(self: &std::sync::Arc<Self>, members: Vec<String>) -> String {
         let mut sorted = members;
         sorted.sort_unstable();
