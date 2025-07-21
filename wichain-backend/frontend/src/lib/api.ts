@@ -51,8 +51,10 @@ export async function apiGetIdentity(): Promise<Identity> {
 
 export async function apiSetAlias(newAlias: string): Promise<boolean> {
   try {
-    // backend param: new_alias
-    await invoke('set_alias', { new_alias: newAlias });
+    await invoke('set_alias', {
+      new_alias: newAlias, // new backend
+      newAlias,            // older backend
+    });
     return true;
   } catch (err) {
     console.error('set_alias failed', err);
@@ -107,19 +109,21 @@ export async function apiListGroups(): Promise<GroupInfo[]> {
 /* ------------------------------------------------------------------ */
 
 /** Send *peer* message (must give a peer id). */
+/** Send *peer* message (must give a peer id). */
 export async function apiAddPeerMessage(
   text: string,
   peerId: string,
 ): Promise<boolean> {
   try {
-    if (!peerId?.trim()) {
+    const pid = peerId?.trim();
+    if (!pid) {
       console.warn('apiAddPeerMessage: empty peerId');
       return false;
     }
-    // backend params: content, to_peer
     await invoke('add_chat_message', {
       content: text,
-      to_peer: peerId,
+      to_peer: pid, // new backend
+      toPeer: pid,  // older backend
     });
     return true;
   } catch (err) {
@@ -134,14 +138,15 @@ export async function apiAddGroupMessage(
   groupId: string,
 ): Promise<boolean> {
   try {
-    if (!groupId?.trim()) {
+    const gid = groupId?.trim();
+    if (!gid) {
       console.warn('apiAddGroupMessage: empty groupId');
       return false;
     }
-    // backend params: content, group_id
     await invoke('add_group_message', {
       content: text,
-      group_id: groupId,
+      group_id: gid, // new backend
+      groupId: gid,  // older backend
     });
     return true;
   } catch (err) {
