@@ -259,6 +259,8 @@ async fn record_decrypted_chat(
 // inbound network handler
 // -----------------------------------------------------------------------------
 
+// Replace the existing handle_incoming_network_payload function with this fixed version
+
 async fn handle_incoming_network_payload(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
@@ -280,14 +282,11 @@ async fn handle_incoming_network_payload(
     // ---- 0. Try direct SHA3-XOR deobfuscation w/ reported 'from' ----
     if let Some(clear) = simple_deobfuscate_json(my_pub_b64, network_from_b64, cleaned) {
         debug!("inbound: deobf w/reported sender OK ({} bytes).", clear.len());
-        match serde_json::from_str::<ChatSigned>(&clear) {
-            Ok(chat_signed) => {
-                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-                return;
-            }
-            Err(e) => {
-                warn!("inbound: deobf OK but JSON parse failed: {e}; trying peers + fallbacks.");
-            }
+        if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
+            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
+            return; // SUCCESS - exit early to prevent duplicate processing
+        } else {
+            debug!("inbound: deobf OK but JSON parse failed; trying fallbacks.");
         }
     } else {
         debug!("inbound: deobf w/reported sender FAILED; will brute peers.");
@@ -297,7 +296,7 @@ async fn handle_incoming_network_payload(
     let peers = node.list_peers().await;
     for p in &peers {
         if p.id == network_from_b64 {
-            continue; // already tried
+            continue; // already tried above
         }
         if let Some(clear) = simple_deobfuscate_json(my_pub_b64, &p.id, cleaned) {
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
@@ -306,7 +305,7 @@ async fn handle_incoming_network_payload(
                     &p.id[..p.id.len().min(8)]
                 );
                 record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
-                return;
+                return; // SUCCESS - exit early to prevent duplicate processing
             }
         }
     }
@@ -315,7 +314,7 @@ async fn handle_incoming_network_payload(
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(cleaned) {
         debug!("inbound: payload parsed directly as ChatSigned JSON.");
         record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-        return;
+        return; // SUCCESS - exit early
     }
 
     // ---- 3. Or a bare ChatBody JSON ----
@@ -323,7 +322,7 @@ async fn handle_incoming_network_payload(
         debug!("inbound: payload parsed directly as ChatBody JSON (unsigned).");
         let chat_signed = ChatSigned { body, sig_b64: String::new() };
         record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-        return;
+        return; // SUCCESS - exit early
     }
 
     // ---- 4. Give up: store readable tagged fallback (shortened) ----
@@ -346,6 +345,7 @@ async fn handle_incoming_network_payload(
         sig_b64: String::new(),
     };
     record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
+    // No return needed here as this is the last case
 }
 
 // -----------------------------------------------------------------------------
