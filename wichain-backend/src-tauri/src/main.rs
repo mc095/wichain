@@ -143,27 +143,38 @@ pub struct AppState {
 
 /// Peer key derivation: stable ordering so both sides match.
 fn decode_pubkey_32(s: &str) -> [u8; 32] {
-    let trimmed = s.trim();
+    let trimmed = s.trim().replace("\n", "").replace("\r", "");
+    log::debug!("decode_pubkey_32: input='{}'", trimmed);
+
     if let Ok(bytes) = general_purpose::STANDARD.decode(trimmed.as_bytes()) {
+        log::debug!("  base64 decoded ({} bytes)={:02x?}", bytes.len(), bytes);
         if bytes.len() == 32 {
             let mut out = [0u8; 32];
             out.copy_from_slice(&bytes);
             return out;
         }
     }
-    // Fallback: hash the string if invalid
+
+    log::warn!("  invalid key length, using SHA3 fallback");
+
     let mut h = Sha3_256::default();
     h.update(trimmed.as_bytes());
     let digest = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
+    log::debug!("  fallback hashed key={:02x?}", out);
     out
 }
+
 
 fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
     let a_raw = decode_pubkey_32(a);
     let b_raw = decode_pubkey_32(b);
     let (lo, hi) = if a_raw <= b_raw { (a_raw, b_raw) } else { (b_raw, a_raw) };
+
+    log::debug!("derive_peer_aes_key: a={} b={}", a, b);
+    log::debug!("  a_raw={:02x?}", a_raw);
+    log::debug!("  b_raw={:02x?}", b_raw);
 
     let mut hasher = Sha3_256::default();
     hasher.update(lo);
@@ -171,24 +182,51 @@ fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
     hasher.update(hi);
 
     let digest = hasher.finalize();
-    Key::<Aes256Gcm>::from_slice(&digest[..32]).to_owned()
+    let key = Key::<Aes256Gcm>::from_slice(&digest[..32]).to_owned();
+
+    log::debug!("  derived AES key={:02x?}", key);
+
+    key
 }
+
 
 
 fn encrypt_aes(plaintext: &[u8], key: &Key<Aes256Gcm>) -> (Vec<u8>, [u8; 12]) {
+    log::debug!("encrypt_aes: plaintext='{}' ({} bytes)", 
+        String::from_utf8_lossy(plaintext), plaintext.len());
+    log::debug!("  key={:02x?}", key);
+
     let cipher = Aes256Gcm::new(key);
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
+    log::debug!("  nonce={:02x?}", nonce);
+
     let nonce_obj = Nonce::from_slice(&nonce);
     let ct = cipher.encrypt(nonce_obj, plaintext).expect("encrypt");
+
+    log::debug!("  ciphertext={:02x?}", ct);
+
     (ct, nonce)
 }
 
+
 fn decrypt_aes(ciphertext: &[u8], nonce: &[u8; 12], key: &Key<Aes256Gcm>) -> Result<Vec<u8>, ()> {
+    log::debug!("decrypt_aes: ciphertext ({} bytes)={:02x?}", ciphertext.len(), ciphertext);
+    log::debug!("  nonce={:02x?}", nonce);
+    log::debug!("  key={:02x?}", key);
+
     let cipher = Aes256Gcm::new(key);
     let nonce_obj = Nonce::from_slice(nonce);
-    cipher.decrypt(nonce_obj, ciphertext).map_err(|_| ())
+    let result = cipher.decrypt(nonce_obj, ciphertext);
+
+    match &result {
+        Ok(clear) => log::debug!("  decrypted='{}'", String::from_utf8_lossy(clear)),
+        Err(_) => log::warn!("  decryption FAILED!"),
+    }
+
+    result.map_err(|_| ())
 }
+
 
 // -----------------------------------------------------------------------------
 // main
