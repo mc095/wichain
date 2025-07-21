@@ -594,32 +594,44 @@ async fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<GroupInfo>
 async fn add_chat_message(
     state: tauri::State<'_, AppState>,
     content: String,
-    to_peer: Option<String>,
+    to_peer: String,
 ) -> Result<(), String> {
-    let peer_id = match to_peer {
-        Some(p) if !p.trim().is_empty() => p,
-        _ => return Err("peer required".into()),
-    };
+    // --- validate peer id ---------------------------------------------------
+    let peer_id_trim = to_peer.trim();
+    if peer_id_trim.is_empty() {
+        return Err("peer required".into());
+    }
+    let peer_id = peer_id_trim.to_string();
 
-    let (my_pub, my_sk) = {
+    log::debug!(
+        "add_chat_message: to_peer={} content_len={}",
+        &peer_id[..peer_id.len().min(12)],
+        content.len()
+    );
+
+    // --- snapshot my pubkey -------------------------------------------------
+    let my_pub = {
         let id = state.identity.lock().await;
-        (id.public_key_b64.clone(), state.signing_key.lock().await.clone())
+        id.public_key_b64.clone()
     };
 
-    // canonical body
-    let body = ChatBody {
-        from: my_pub.clone(),
-        to: Some(peer_id.clone()),
-        text: content.clone(),
-        ts_ms: now_ms(),
+    // --- build + sign plaintext ---------------------------------------------
+    let chat_signed = {
+        let my_sk = state.signing_key.lock().await;
+        let body = ChatBody {
+            from: my_pub.clone(),
+            to: Some(peer_id.clone()),
+            text: content.clone(),
+            ts_ms: now_ms(),
+        };
+        ChatSigned::new_signed(body, &*my_sk)
     };
-    // signed plaintext
-    let chat_signed = ChatSigned::new_signed(body, &my_sk);
 
-    // encrypt for peer
+    // --- encrypt for peer ---------------------------------------------------
     let key = derive_peer_aes_key(&my_pub, &peer_id);
     let clear_json = serde_json::to_vec(&chat_signed).map_err(|e| e.to_string())?;
     let (ct, nonce) = encrypt_aes(&clear_json, &key);
+
     let enc = ChatEncrypted {
         from: my_pub.clone(),
         to: Some(peer_id.clone()),
@@ -631,23 +643,25 @@ async fn add_chat_message(
     };
     let enc_json = serde_json::to_string(&enc).map_err(|e| e.to_string())?;
 
-    // append clear (local)
+    // --- append clear locally ------------------------------------------------
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(String::from_utf8(clear_json).unwrap());
+        let clear_str = String::from_utf8(clear_json).map_err(|e| e.to_string())?;
+        chain.add_text_block(clear_str);
         if let Err(e) = chain.save_to_file(&state.blockchain_path) {
             return Err(format!("save error: {e}"));
         }
     }
     let _ = state.app.emit("chat_update", ());
 
-    // send encrypted JSON to peer
+    // --- send encrypted to peer ---------------------------------------------
     if let Err(e) = state.node.send_direct_block(&peer_id, enc_json).await {
         warn!("send_direct_block error -> {}: {e}", peer_id);
     }
 
     Ok(())
 }
+
 
 /// Send a *group* chat message* (fan‑out encrypted copies).
 #[tauri::command]
