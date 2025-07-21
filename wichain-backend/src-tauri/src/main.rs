@@ -3,8 +3,8 @@
 //! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ### Security notes
-//! * **Obfuscation only**: SHA3‑512 mask + XOR + Base64. This is *not* real encryption.
-//! * **Authenticity**: Chat bodies signed with Ed25519 (still intact).
+//! * **Obfuscation only**: SHA3‑512 mask + XOR + Base64. *Not* real encryption.
+//! * **Authenticity**: Chat bodies signed with Ed25519.
 //! * **Transport**: Signed JSON obfuscated before UDP send.
 //! * **Ledger**: Clear signed JSON appended locally (tamper‑evident blockchain file).
 //!
@@ -190,10 +190,9 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
 // inbound payload cleaning
 // -----------------------------------------------------------------------------
 
-/// Clean an incoming payload string before base64 decode / JSON parse.
-///
+/// Clean a payload string before base64 decode / JSON parse.
 /// * trims whitespace
-/// * strips surrounding quotes
+/// * strips surrounding quotes (if it came out of JSON string)
 /// * strips our own "[UNREADABLE] " prefix (when reprocessing saved chain)
 fn clean_transport_payload(s: &str) -> &str {
     let mut trimmed = s.trim();
@@ -209,8 +208,53 @@ fn clean_transport_payload(s: &str) -> &str {
 }
 
 // -----------------------------------------------------------------------------
+// chat persistence
+// -----------------------------------------------------------------------------
+fn now_ms() -> u128 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default()
+}
+
+async fn record_decrypted_chat(
+    app: &AppHandle,
+    blockchain: &Arc<Mutex<Blockchain>>,
+    blockchain_path: &Path,
+    chat_signed: &ChatSigned,
+    network_from_b64: &str,
+) {
+    // best-effort signature check (log only)
+    if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&chat_signed.body.from) {
+        if sender_pub_bytes.len() == 32 {
+            if let Ok(vk) = VerifyingKey::from_bytes(
+                <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
+            ) {
+                if !chat_signed.verify(&vk) {
+                    warn!(
+                        "Chat signature INVALID (declared from={} net_from={}).",
+                        &chat_signed.body.from[..chat_signed.body.from.len().min(8)],
+                        &network_from_b64[..network_from_b64.len().min(8)]
+                    );
+                }
+            }
+        }
+    }
+
+    let json = serde_json::to_string(chat_signed).unwrap();
+    {
+        let mut chain = blockchain.lock().await;
+        chain.add_text_block(json.clone());
+        if let Err(e) = chain.save_to_file(blockchain_path) {
+            warn!("Failed saving chain after chat: {e}");
+        }
+    }
+    let _ = app.emit("chat_update", ());
+    debug!("record_decrypted_chat: appended to blockchain ({} bytes).", json.len());
+}
+
+// -----------------------------------------------------------------------------
 // inbound network handler
 // -----------------------------------------------------------------------------
+
 async fn handle_incoming_network_payload(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
@@ -219,6 +263,7 @@ async fn handle_incoming_network_payload(
     network_from_b64: &str,
     _network_to_b64: &str,
     payload_str: &str,
+    node: &Arc<NetworkNode>,
 ) {
     let cleaned = clean_transport_payload(payload_str);
     debug!(
@@ -230,28 +275,25 @@ async fn handle_incoming_network_payload(
 
     // ---- 0. Try direct SHA3-XOR deobfuscation w/ reported 'from' ----
     if let Some(clear) = simple_deobfuscate_json(my_pub_b64, network_from_b64, cleaned) {
-        debug!(
-            "inbound: deobf w/reported sender OK ({} bytes).",
-            clear.len()
-        );
-        if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
-            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-            return;
-        } else {
-            warn!("inbound: deobf OK but JSON parse failed; trying peers + fallbacks.");
+        debug!("inbound: deobf w/reported sender OK ({} bytes).", clear.len());
+        match serde_json::from_str::<ChatSigned>(&clear) {
+            Ok(chat_signed) => {
+                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
+                return;
+            }
+            Err(e) => {
+                warn!("inbound: deobf OK but JSON parse failed: {e}; trying peers + fallbacks.");
+            }
         }
     } else {
         debug!("inbound: deobf w/reported sender FAILED; will brute peers.");
     }
 
     // ---- 1. Brute deobf w/ *all* known peers (sender mismatch) ----
-    let peers = {
-        let state: tauri::State<'_, AppState> = app.state();
-        state.node.list_peers().await
-    };
+    let peers = node.list_peers().await;
     for p in &peers {
         if p.id == network_from_b64 {
-            continue;
+            continue; // already tried
         }
         if let Some(clear) = simple_deobfuscate_json(my_pub_b64, &p.id, cleaned) {
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
@@ -300,33 +342,6 @@ async fn handle_incoming_network_payload(
         sig_b64: String::new(),
     };
     record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-}
-
-// -----------------------------------------------------------------------------
-// chat persistence
-// -----------------------------------------------------------------------------
-fn now_ms() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default()
-}
-
-async fn record_decrypted_chat(
-    app: &AppHandle,
-    blockchain: &Arc<Mutex<Blockchain>>,
-    blockchain_path: &Path,
-    chat_signed: &ChatSigned,
-    _network_from_b64: &str,
-) {
-    let json = serde_json::to_string(chat_signed).unwrap();
-    {
-        let mut chain = blockchain.lock().await;
-        chain.add_text_block(json.clone());
-        if let Err(e) = chain.save_to_file(blockchain_path) {
-            warn!("Failed saving chain after chat: {e}");
-        }
-    }
-    let _ = app.emit("chat_update", ());
-    debug!("record_decrypted_chat: appended to blockchain ({} bytes).", json.len());
 }
 
 // -----------------------------------------------------------------------------
@@ -404,7 +419,10 @@ async fn add_chat_message(
 }
 
 #[tauri::command]
-async fn create_group(state: tauri::State<'_, AppState>, members: Vec<String>) -> Result<String, String> {
+async fn create_group(
+    state: tauri::State<'_, AppState>,
+    members: Vec<String>,
+) -> Result<String, String> {
     if members.is_empty() {
         return Err("group needs at least 1 member".into());
     }
@@ -582,19 +600,19 @@ fn main() {
                 let id_guard = identity.blocking_lock();
                 (id_guard.public_key_b64.clone(), id_guard.alias.clone())
             };
-            let node = Arc::new(NetworkNode::new(
+            let node: Arc<NetworkNode> = Arc::new(NetworkNode::new(
                 WICHAIN_PORT,
                 node_id.clone(),
                 node_alias.clone(),
-                node_id.clone(),
+                node_id.clone(), // duplicate pubkey arg for compat
             ));
 
             // Spawn network loop
             let (tx, mut rx) = tokio::sync::mpsc::channel::<NetworkMessage>(64);
             {
-                let node = node.clone();
+                let node_spawn = node.clone();
                 tauri::async_runtime::spawn(async move {
-                    node.start(tx).await;
+                    node_spawn.start(tx).await;
                 });
             }
             info!(
@@ -607,7 +625,9 @@ fn main() {
                 let blockchain = Arc::clone(&blockchain);
                 let blockchain_path = blockchain_path.clone();
                 let identity = Arc::clone(&identity);
+                let node_for_task = node.clone();
                 let app_handle_for_task = app.handle().clone();
+
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = rx.recv().await {
                         match msg {
@@ -624,6 +644,7 @@ fn main() {
                                     &from,
                                     &to,
                                     &payload_json,
+                                    &node_for_task,
                                 )
                                 .await;
                             }
