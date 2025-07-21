@@ -55,7 +55,7 @@ pub struct ChatBody {
     pub from: String,        // sender pubkey b64
     pub to: Option<String>,  // receiver pubkey b64 OR group_id
     pub text: String,        // UTF‑8
-    pub ts_ms: u128,         // unix ms
+    pub ts_ms: u64,         // unix ms
 }
 
 /// Signed body (plaintext + Ed25519 sig).
@@ -210,9 +210,13 @@ fn clean_transport_payload(s: &str) -> &str {
 // -----------------------------------------------------------------------------
 // chat persistence
 // -----------------------------------------------------------------------------
-fn now_ms() -> u128 {
+// Also update the now_ms() function:
+fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)  // Cast to u64
+        .unwrap_or_default()
 }
 
 async fn record_decrypted_chat(
