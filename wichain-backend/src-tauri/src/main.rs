@@ -358,7 +358,7 @@ async fn handle_incoming_network_payload(
     _network_to_b64: &str,
     payload_str: &str,
 ) {
-    // 0. Try SHA3-XOR deobfuscation
+    // 0. Try direct deobfuscation with reported "from"
     if let Some(clear_json) = simple_deobfuscate_json(my_pub_b64, network_from_b64, payload_str) {
         if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear_json) {
             record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
@@ -366,31 +366,36 @@ async fn handle_incoming_network_payload(
         }
     }
 
-    // 1. ChatSigned clear
+    // 1. Brute try deobfuscation with all peers (in case 'from' is wrong)
+    let peers = app.state::<AppState>().node.list_peers().await;
+    for p in peers {
+        if let Some(clear_json) = simple_deobfuscate_json(my_pub_b64, &p.id, payload_str) {
+            if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear_json) {
+                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
+                return;
+            }
+        }
+    }
+
+    // 2. Try if the payload is already clear ChatSigned JSON
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(payload_str) {
         record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return;
     }
 
-    // 2. ChatBody clear
-    if let Ok(body) = serde_json::from_str::<ChatBody>(payload_str) {
-        let chat_signed = ChatSigned { body, sig_b64: String::new() };
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-        return;
-    }
-
-    // 3. Raw fallback
+    // 3. Fallback: wrap raw payload as plain text (force store as text)
     let chat_signed = ChatSigned {
         body: ChatBody {
             from: network_from_b64.to_string(),
             to: Some(my_pub_b64.to_string()),
-            text: payload_str.to_string(),
+            text: format!("[UNREADABLE] {}", payload_str),
             ts_ms: now_ms(),
         },
         sig_b64: String::new(),
     };
     record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
 }
+
 
 // -----------------------------------------------------------------------------
 // chat persistence
