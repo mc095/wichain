@@ -142,15 +142,38 @@ pub struct AppState {
 // -----------------------------------------------------------------------------
 
 /// Peer key derivation: stable ordering so both sides match.
-fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
-    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-    let mut hasher = Sha3_256::default(); 
-    hasher.update(lo.as_bytes());
-    hasher.update(b"|");
-    hasher.update(hi.as_bytes());
-    let digest = hasher.finalize();
-    Key::<Aes256Gcm>::from_slice(&digest[..32]).clone()
+fn decode_pubkey_32(s: &str) -> [u8; 32] {
+    let trimmed = s.trim();
+    if let Ok(bytes) = general_purpose::STANDARD.decode(trimmed.as_bytes()) {
+        if bytes.len() == 32 {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&bytes);
+            return out;
+        }
+    }
+    // Fallback: hash the string if invalid
+    let mut h = Sha3_256::default();
+    h.update(trimmed.as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest[..32]);
+    out
 }
+
+fn derive_peer_aes_key(a: &str, b: &str) -> Key<Aes256Gcm> {
+    let a_raw = decode_pubkey_32(a);
+    let b_raw = decode_pubkey_32(b);
+    let (lo, hi) = if a_raw <= b_raw { (a_raw, b_raw) } else { (b_raw, a_raw) };
+
+    let mut hasher = Sha3_256::default();
+    hasher.update(lo);
+    hasher.update(b"|");
+    hasher.update(hi);
+
+    let digest = hasher.finalize();
+    Key::<Aes256Gcm>::from_slice(&digest[..32]).to_owned()
+}
+
 
 fn encrypt_aes(plaintext: &[u8], key: &Key<Aes256Gcm>) -> (Vec<u8>, [u8; 12]) {
     let cipher = Aes256Gcm::new(key);
