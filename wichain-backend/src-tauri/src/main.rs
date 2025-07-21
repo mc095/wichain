@@ -612,15 +612,13 @@ fn sorted_clone(v: &[String]) -> Vec<String> {
 /// Attempt to decrypt `ChatEncrypted` using provided key; returns `ChatSigned`.
 fn decrypt_chat_encrypted(enc: &ChatEncrypted, key: &Key<Aes256Gcm>) -> Option<ChatSigned> {
     log::debug!(
-        "decrypt_chat_encrypted: from={} to={:?} is_group={} ct_b64_len={} nonce_b64_len={}",
+        "decrypt_chat_encrypted: from={} to={:?} nonce_len={} ciphertext_len={}",
         &enc.from[..enc.from.len().min(12)],
         enc.to.as_deref().map(|s| &s[..s.len().min(12)]),
-        enc.is_group,
-        enc.ciphertext_b64.len(),
-        enc.nonce_b64.len()
+        enc.nonce_b64.len(),
+        enc.ciphertext_b64.len()
     );
 
-    // nonce
     let nonce_bytes_vec = match general_purpose::STANDARD.decode(&enc.nonce_b64) {
         Ok(v) => v,
         Err(e) => {
@@ -629,25 +627,24 @@ fn decrypt_chat_encrypted(enc: &ChatEncrypted, key: &Key<Aes256Gcm>) -> Option<C
         }
     };
     if nonce_bytes_vec.len() != 12 {
-        warn!(
-            "decrypt_chat_encrypted: nonce length {} != 12",
-            nonce_bytes_vec.len()
-        );
+        warn!("decrypt_chat_encrypted: nonce length {} != 12", nonce_bytes_vec.len());
         return None;
     }
     let mut nonce_bytes = [0u8; 12];
     nonce_bytes.copy_from_slice(&nonce_bytes_vec);
 
-    // ciphertext
     let ct_vec = match general_purpose::STANDARD.decode(&enc.ciphertext_b64) {
         Ok(v) => v,
         Err(e) => {
-            warn!("decrypt_chat_encrypted: ct base64 decode error: {e}");
+            warn!("decrypt_chat_encrypted: ciphertext base64 decode error: {e}");
             return None;
         }
     };
 
-    // decrypt
+    log::debug!("decrypt_chat_encrypted: key={:02x?}", key.as_ref() as &[u8]);
+    log::debug!("decrypt_chat_encrypted: nonce={:02x?}", nonce_bytes);
+    log::debug!("decrypt_chat_encrypted: ciphertext={:02x?}", &ct_vec[..ct_vec.len().min(32)]);
+
     let clear = match decrypt_aes(&ct_vec, &nonce_bytes, key) {
         Ok(v) => v,
         Err(_) => {
@@ -655,28 +652,23 @@ fn decrypt_chat_encrypted(enc: &ChatEncrypted, key: &Key<Aes256Gcm>) -> Option<C
             return None;
         }
     };
+    log::debug!(
+        "decrypt_chat_encrypted: cleartext (first 100 bytes)={}",
+        String::from_utf8_lossy(&clear[..clear.len().min(100)])
+    );
 
-    // JSON parse
     match serde_json::from_slice::<ChatSigned>(&clear) {
         Ok(cs) => {
-            log::debug!(
-                "decrypt_chat_encrypted: ChatSigned parse OK (from={} to={:?} text_len={})",
-                &cs.body.from[..cs.body.from.len().min(12)],
-                cs.body.to.as_deref().map(|s| &s[..s.len().min(12)]),
-                cs.body.text.len()
-            );
+            log::debug!("decrypt_chat_encrypted: JSON parse OK (text_len={})", cs.body.text.len());
             Some(cs)
         }
         Err(e) => {
-            warn!("decrypt_chat_encrypted: ChatSigned JSON parse error: {e}");
-            log::debug!(
-                "  clear text was: {}",
-                String::from_utf8_lossy(&clear)
-            );
+            warn!("decrypt_chat_encrypted: JSON parse error: {e}");
             None
         }
     }
 }
+
 
 
 /// After decrypting inbound or preparing outbound, append **clear signed** JSON.
