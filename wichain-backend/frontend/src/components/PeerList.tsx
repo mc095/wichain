@@ -1,4 +1,4 @@
-// frontend/src/components/PeerList.tsx
+import { motion } from 'framer-motion';
 import type { PeerInfo, GroupInfo } from '../lib/api';
 
 type Target =
@@ -26,63 +26,65 @@ export function PeerList({
   onSelectGroup,
 }: Props) {
   return (
-    <div className="flex flex-col gap-4 text-sm">
-      {/* Peers */}
+    <div className="flex flex-col gap-6 text-sm">
       <div>
-        <h2 className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+        <h2 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           Peers
         </h2>
-        <ul className="space-y-0.5">
+        <ul className="space-y-1">
           {peers.length === 0 && (
-            <li className="px-2 py-1 text-xs text-neutral-500">No peers yet…</li>
+            <li className="px-3 py-2 text-xs text-[var(--text-muted)]">No peers yet…</li>
           )}
           {peers.map((p) => {
             const sel = selected?.kind === 'peer' && selected.id === p.id;
             const label = p.alias || p.id.slice(0, 8) + '…';
             return (
-              <li key={p.id}>
+              <motion.li
+                key={p.id}
+                className={`peer-item ${sel ? 'selected' : ''}`}
+                whileHover={{ x: 5 }}
+                transition={{ duration: 0.2 }}
+              >
                 <button
-                  className={`w-full truncate rounded px-2 py-1 text-left transition-colors ${
-                    sel
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-neutral-800 text-neutral-100 hover:bg-neutral-700'
-                  }`}
+                  className="flex w-full items-center gap-3"
                   onClick={() => onSelectPeer(p.id)}
                   title={label}
                 >
-                  {label}
+                  <div className="avatar">{label.charAt(0).toUpperCase()}</div>
+                  <span className="truncate">{label}</span>
                 </button>
-              </li>
+              </motion.li>
             );
           })}
         </ul>
       </div>
 
-      {/* Groups */}
       <div>
-        <h2 className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+        <h2 className="mb-2 px-3 text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">
           Groups
         </h2>
-        <ul className="space-y-0.5">
+        <ul className="space-y-1">
           {groups.length === 0 && (
-            <li className="px-2 py-1 text-xs text-neutral-500">No groups yet…</li>
+            <li className="px-3 py-2 text-xs text-[var(--text-muted)]">No groups yet…</li>
           )}
           {groups.map((g) => {
             const sel = selected?.kind === 'group' && selected.id === g.id;
             return (
-              <li key={g.id}>
+              <motion.li
+                key={g.id}
+                className={`group-item ${sel ? 'selected' : ''}`}
+                whileHover={{ x: 5 }}
+                transition={{ duration: 0.2 }}
+              >
                 <button
-                  className={`w-full truncate rounded px-2 py-1 text-left transition-colors ${
-                    sel
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-neutral-800 text-neutral-100 hover:bg-neutral-700'
-                  }`}
+                  className="flex w-full items-center gap-3"
                   onClick={() => onSelectGroup(g.id)}
                   title={groupTooltip(g, aliasMap, myPub)}
                 >
-                  {groupLabel(g, aliasMap, myPub)}
+                  <div className="avatar">G</div>
+                  <span className="truncate">{groupLabel(g, aliasMap, myPub)}</span>
                 </button>
-              </li>
+              </motion.li>
             );
           })}
         </ul>
@@ -90,10 +92,6 @@ export function PeerList({
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/* Helpers                                                            */
-/* ------------------------------------------------------------------ */
 
 function groupLabel(
   g: GroupInfo,

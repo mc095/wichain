@@ -1,6 +1,4 @@
-// frontend/src/App.tsx
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import './App.css';
 import {
   apiGetIdentity,
   apiSetAlias,
@@ -16,37 +14,31 @@ import {
   type ChatBody,
   type GroupInfo,
 } from './lib/api';
-
 import { PeerList } from './components/PeerList';
 import { ChatView } from './components/ChatView';
 import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
+import { OnboardingSlideshow } from './components/OnboardingSlideShow';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
-
-/* ------------------------------------------------------------------ */
-/* Selection model                                                    */
-/* ------------------------------------------------------------------ */
+import { motion } from 'framer-motion';
 
 type Target =
   | { kind: 'peer'; id: string }
   | { kind: 'group'; id: string }
   | null;
 
-/* ------------------------------------------------------------------ */
-/* Component                                                          */
-/* ------------------------------------------------------------------ */
-
 export default function App() {
-  /* ---------------- Identity ---------------- */
   const [identity, setIdentity] = useState<Identity | null>(null);
-  const [onboarding, setOnboarding] = useState(false);
+  const [showSlideshow, setShowSlideshow] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const loadIdentity = useCallback(async () => {
     const id = await apiGetIdentity();
     setIdentity(id);
     if (id.alias.startsWith('Anon-')) {
-      setOnboarding(true);
+      setShowSlideshow(true);
     }
   }, []);
 
@@ -54,29 +46,38 @@ export default function App() {
     loadIdentity();
   }, [loadIdentity]);
 
-  /* ---------------- Target ---------------- */
+  // Groups (moved up to ensure refreshGroups is declared before use)
+  const [groups, setGroups] = useState<GroupInfo[]>([]);
+  const refreshGroups = useCallback(() => {
+    apiListGroups()
+      .then((gs) => {
+        setGroups(gs);
+        setTarget((t) =>
+          t?.kind === 'group' && !gs.some((g) => g.id === t.id) ? null : t,
+        );
+      })
+      .catch(console.error);
+  }, []);
+
   const [target, setTarget] = useState<Target>(null);
 
-  // React to alias changes from backend
   useEffect(() => {
     const un = listen('alias_update', () => {
       console.log('alias_update event');
       loadIdentity();
-      refreshGroups(); // update group labels when aliases change
+      refreshGroups();
     });
     return () => {
       un.then((f) => f());
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadIdentity, refreshGroups]);
 
-  /* ---------------- Peers ---------------- */
+  // Peers
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const refreshPeers = useCallback(() => {
     apiGetPeers()
       .then((p) => {
         setPeers(p);
-        // If selected peer disappeared, clear selection
         setTarget((t) =>
           t?.kind === 'peer' && !p.some((peer) => peer.id === t.id) ? null : t,
         );
@@ -97,21 +98,7 @@ export default function App() {
     };
   }, [refreshPeers]);
 
-  /* ---------------- Groups ---------------- */
-  const [groups, setGroups] = useState<GroupInfo[]>([]);
-  const refreshGroups = useCallback(() => {
-    apiListGroups()
-      .then((gs) => {
-        setGroups(gs);
-        // If selected group no longer exists, clear
-        setTarget((t) =>
-          t?.kind === 'group' && !gs.some((g) => g.id === t.id) ? null : t,
-        );
-      })
-      .catch(console.error);
-  }, []);
-
-  // initial load and listen for group updates
+  // Groups effect
   useEffect(() => {
     refreshGroups();
     const unlistenPromise = listen('group_update', () => {
@@ -123,7 +110,7 @@ export default function App() {
     };
   }, [refreshGroups]);
 
-  /* ---------------- Chat History ---------------- */
+  // Chat History
   const [messages, setMessages] = useState<ChatBody[]>([]);
   const refreshMessages = useCallback(() => {
     apiGetChatHistory().then(setMessages).catch(console.error);
@@ -141,7 +128,7 @@ export default function App() {
     };
   }, [refreshMessages]);
 
-  /* ---------------- Compose / Send ---------------- */
+  // Compose / Send
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
@@ -171,7 +158,7 @@ export default function App() {
     }
   }, [text, target, identity, refreshMessages]);
 
-  /* ---------------- Reset chat only ---------------- */
+  // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
   async function doReset() {
     setResetOpen(false);
@@ -181,14 +168,15 @@ export default function App() {
     }
   }
 
-  /* ---------------- Onboarding -> save alias ---------------- */
+  // Onboarding
   async function onboardingDone(alias: string) {
     await apiSetAlias(alias);
-    setOnboarding(false);
+    setShowOnboarding(false);
+    setShowSlideshow(false);
     loadIdentity();
   }
 
-  /* ---------------- Group modal ---------------- */
+  // Group modal
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const openGroupModal = () => setGroupModalOpen(true);
   const closeGroupModal = () => setGroupModalOpen(false);
@@ -203,11 +191,10 @@ export default function App() {
     }
   };
 
-  /* ---------------- Derived maps ---------------- */
+  // Derived data
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
 
-  /** map pubkey->alias (includes self) */
   const aliasMap = useMemo(() => {
     const m: Record<string, string> = {};
     if (identity) m[identity.public_key_b64] = identity.alias;
@@ -217,10 +204,8 @@ export default function App() {
     return m;
   }, [identity, peers]);
 
-  /** Filter out self from displayed peers. */
   const displayedPeers = peers.filter((p) => p.id !== myPub);
 
-  /* ---------------- Derived target label ---------------- */
   const targetLabel = (() => {
     if (!target) return 'Select a peer or group…';
     if (target.kind === 'peer') {
@@ -232,55 +217,86 @@ export default function App() {
     }
   })();
 
-  /* ---------------- Render ---------------- */
+  // Render
+  if (showSlideshow && identity) {
+    return (
+      <OnboardingSlideshow
+        onGetStarted={() => {
+          setShowSlideshow(false);
+          setShowOnboarding(true);
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="flex h-screen flex-col bg-neutral-950 text-neutral-100">
-      {/* Header */}
-      <header className="flex items-center justify-between border-b border-neutral-800 px-4 py-2">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-bold text-emerald-400">WiChain</h1>
-          <span className="text-xs text-neutral-400">
-            {myAlias} · {myPub.slice(0, 10)}…
-          </span>
+    <motion.div
+      className="flex h-screen flex-col bg-[var(--background)] text-[var(--foreground)]"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+    >
+      <header className="header">
+        <div className="flex items-center gap-4">
+          <motion.button
+            className="p-2 text-[var(--foreground)] hover:text-[var(--primary)]"
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </motion.button>
+          <h1 className="text-2xl font-bold text-[var(--primary)]">WiChain</h1>
+          <span className="text-sm text-[var(--text-muted)]">{myAlias}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+        <div className="flex items-center gap-3">
+          <motion.button
+            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-dark)]"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             onClick={openGroupModal}
           >
             New Group
-          </button>
-          <button
-            className="rounded bg-neutral-700 px-2 py-1 text-xs hover:bg-neutral-600"
+          </motion.button>
+          <motion.button
+            className="rounded-lg bg-[var(--neutral-light)] px-4 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-[var(--neutral)]"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
             onClick={() => setResetOpen(true)}
           >
             Reset Chat
-          </button>
+          </motion.button>
         </div>
       </header>
 
-      {/* Main */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        <aside className="w-64 overflow-y-auto border-r border-neutral-800 p-2">
-          <PeerList
-            peers={displayedPeers}
-            groups={groups}
-            aliasMap={aliasMap}
-            myPub={myPub}
-            selected={target}
-            onSelectPeer={(id) => {
-              console.log('Peer selected:', id);
-              setTarget({ kind: 'peer', id });
-            }}
-            onSelectGroup={(id) => {
-              console.log('Group selected:', id);
-              setTarget({ kind: 'group', id });
-            }}
-          />
-        </aside>
+        <motion.aside
+          className="sidebar"
+          initial={{ width: sidebarOpen ? '18rem' : '0' }}
+          animate={{ width: sidebarOpen ? '18rem' : '0' }}
+          transition={{ duration: 0.3 }}
+        >
+          {sidebarOpen && (
+            <PeerList
+              peers={displayedPeers}
+              groups={groups}
+              aliasMap={aliasMap}
+              myPub={myPub}
+              selected={target}
+              onSelectPeer={(id) => {
+                console.log('Peer selected:', id);
+                setTarget({ kind: 'peer', id });
+              }}
+              onSelectGroup={(id) => {
+                console.log('Group selected:', id);
+                setTarget({ kind: 'group', id });
+              }}
+            />
+          )}
+        </motion.aside>
 
-        {/* Chat */}
         <section className="flex flex-1 flex-col">
           <ChatView
             messages={messages}
@@ -289,8 +305,8 @@ export default function App() {
             aliasMap={aliasMap}
             groups={groups}
           />
-          <div className="flex items-center gap-2 border-t border-neutral-800 p-2">
-            <input
+          <div className="input-container">
+            <motion.input
               type="text"
               placeholder={target ? targetLabel : 'Select a peer or group to start'}
               value={text}
@@ -302,21 +318,25 @@ export default function App() {
                 }
               }}
               disabled={sending || !target || !identity}
-              className="flex-1 rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 placeholder-neutral-500 focus:border-emerald-400 focus:outline-none"
+              className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--neutral)] px-4 py-3 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
             />
-            <button
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
+            <motion.button
+              className="rounded-lg bg-[var(--primary)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary-dark)] disabled:opacity-50"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={send}
               disabled={sending || !text.trim() || !target || !identity}
             >
               Send
-            </button>
+            </motion.button>
           </div>
         </section>
       </div>
 
-      {/* Overlays */}
-      {onboarding && identity && (
+      {showOnboarding && identity && (
         <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
       )}
       <ResetConfirm
@@ -333,20 +353,15 @@ export default function App() {
         aliasMap={aliasMap}
         onCreateGroup={createGroup}
       />
-    </div>
+    </motion.div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/* Utilities                                                          */
-/* ------------------------------------------------------------------ */
 
 function groupDisplayName(
   g: GroupInfo,
   aliasMap: Record<string, string>,
   myPub: string,
 ): string {
-  // Show up to 3 aliases (excluding self), then "+N".
   const names = g.members
     .filter((m) => m !== myPub)
     .map((m) => aliasMap[m] ?? m.slice(0, 8) + '…');

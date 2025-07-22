@@ -1,10 +1,6 @@
-// frontend/src/components/ChatView.tsx
 import { useMemo, useRef, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import type { ChatBody, GroupInfo } from '../lib/api';
-
-/* ------------------------------------------------------------------ */
-/* Types                                                               */
-/* ------------------------------------------------------------------ */
 
 type Target =
   | { kind: 'peer'; id: string }
@@ -19,7 +15,6 @@ interface Props {
   groups: GroupInfo[];
 }
 
-/** Flattened UI item */
 interface ChatItem {
   key: string;
   from: string;
@@ -31,10 +26,6 @@ interface ChatItem {
   isGroup: boolean;
 }
 
-/* ------------------------------------------------------------------ */
-/* Helpers                                                             */
-/* ------------------------------------------------------------------ */
-
 function messageMatchesTarget(
   m: ChatBody,
   myPub: string,
@@ -42,10 +33,7 @@ function messageMatchesTarget(
   groups: GroupInfo[],
 ): boolean {
   if (!target) return false;
-
-  // If we don't yet know our pubkey, show nothing rather than drop into weird state.
   if (!myPub) return false;
-
   if (target.kind === 'peer') {
     const peer = target.id;
     return (
@@ -91,10 +79,6 @@ function buildItems(
   });
 }
 
-/* ------------------------------------------------------------------ */
-/* Component                                                           */
-/* ------------------------------------------------------------------ */
-
 export function ChatView({
   messages,
   myPubkeyB64,
@@ -103,7 +87,6 @@ export function ChatView({
   groups,
 }: Props) {
   const safeMyPub = myPubkeyB64 ?? '';
-
   const chatItems = useMemo(
     () => buildItems(messages, safeMyPub, selectedTarget, aliasMap, groups),
     [messages, safeMyPub, selectedTarget, aliasMap, groups],
@@ -116,36 +99,42 @@ export function ChatView({
 
   if (!selectedTarget) {
     return (
-      <div className="flex flex-1 items-center justify-center text-neutral-500">
-        Select a peer or group to start chatting.
+      <div className="flex flex-1 items-center justify-center text-[var(--text-muted)] text-lg">
+        Select a peer or group to start chatting
       </div>
     );
   }
 
   return (
-    <div className="chat-view flex-1 overflow-y-auto p-4">
+    <div className="flex-1 overflow-y-auto p-6 bg-[var(--background)]">
       {chatItems.map((c) => (
-        <div
+        <motion.div
           key={c.key}
-          className={`mb-2 flex w-full ${c.mine ? 'justify-end' : 'justify-start'}`}
+          className={`mb-4 flex w-full ${c.mine ? 'justify-end' : 'justify-start'}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
         >
-          <div
-            className={`max-w-[75%] rounded-lg px-3 py-2 text-sm ${
-              c.mine
-                ? 'bg-emerald-600 text-white'
-                : 'bg-neutral-700 text-neutral-100'
-            }`}
-            title={new Date(c.ts).toLocaleString()}
-          >
-            {(c.isGroup || !c.mine) && (
-              <div className="mb-0.5 text-xs opacity-80">
-                {c.fromAlias}
-                {c.isGroup ? ' · grp' : ''}
-              </div>
+          <div className="flex items-start gap-3 max-w-[70%]">
+            {!c.mine && (
+              <div className="avatar">{c.fromAlias.charAt(0).toUpperCase()}</div>
             )}
-            {c.text}
+            <div
+              className={`message-bubble ${c.mine ? 'message-mine' : 'message-other'}`}
+            >
+              {(c.isGroup || !c.mine) && (
+                <div className="mb-1 text-xs text-[var(--text-muted)]">
+                  {c.fromAlias}
+                  {c.isGroup ? ' · Group' : ''}
+                </div>
+              )}
+              <p>{c.text}</p>
+              <div className="mt-1 text-xs text-[var(--text-muted)] opacity-70">
+                {new Date(c.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
           </div>
-        </div>
+        </motion.div>
       ))}
       <div ref={endRef} />
     </div>

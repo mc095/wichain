@@ -1,5 +1,5 @@
-// frontend/src/components/Onboarding.tsx
 import { useState } from 'react';
+import { motion } from 'framer-motion';
 
 interface Props {
   initialAlias: string;
@@ -8,32 +8,45 @@ interface Props {
 
 export function Onboarding({ initialAlias, onDone }: Props) {
   const [alias, setAlias] = useState(initialAlias);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-      <div className="w-80 rounded-lg bg-neutral-900 p-4 shadow-lg">
-        <h2 className="mb-2 text-lg font-bold text-emerald-400">Welcome to WiChain</h2>
-        <p className="mb-4 text-sm text-neutral-300">
-          Choose a device name (alias) other peers will see on your local network.
+    <motion.div
+      className="modal-overlay"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3 }}
+    >
+      <motion.div
+        className="modal-content"
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.3 }}
+      >
+        <h2 className="mb-2 text-xl font-semibold text-[var(--foreground)]">Set Your Alias</h2>
+        <p className="mb-4 text-sm text-[var(--text-muted)]">
+          Choose a name others will see on the network.
         </p>
         <input
           autoFocus
-          className="mb-4 w-full rounded border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:border-emerald-400 focus:outline-none"
+          className="mb-4 w-full rounded-lg border border-[var(--neutral-light)] bg-[var(--neutral)] px-3 py-2 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
           value={alias}
           onChange={(e) => setAlias(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') onDone(alias.trim());
+            if (e.key === 'Enter' && alias.trim()) onDone(alias.trim());
           }}
+          placeholder="Enter your alias"
         />
-        <div className="flex justify-end gap-2">
+        <div className="flex justify-end">
           <button
-            className="rounded bg-emerald-600 px-4 py-1 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+            className="rounded-full bg-[var(--primary)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-dark)] disabled:opacity-50"
             disabled={!alias.trim()}
             onClick={() => onDone(alias.trim())}
           >
             Save
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

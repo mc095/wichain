@@ -1,7 +1,98 @@
 @import "tailwindcss";
 
-/* App-specific tweaks */
-html,body,#root {
-  @apply h-full w-full bg-gray-950 text-gray-100;
-  font-family: Inter, system-ui, sans-serif;
+:root {
+  --background: #1f252a;
+  --foreground: #e2e8f0;
+  --primary: #10b981;
+  --primary-dark: #047857;
+  --neutral: #2d3748;
+  --neutral-light: #4a5568;
+  --text-muted: #a0aec0;
+  --accent: #68d391;
+  --border: #4a5568;
+  --shadow: rgba(0, 0, 0, 0.3);
+}
+
+body {
+  @apply bg-[var(--background)] text-[var(--foreground)];
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Slideshow styles */
+.slideshow-container {
+  @apply relative flex h-screen w-full items-center justify-center overflow-hidden bg-[var(--background)];
+}
+
+.slide {
+  @apply absolute flex flex-col items-center justify-center p-8 text-center;
+}
+
+.slide-icon {
+  @apply mb-6 h-20 w-20 text-[var(--primary)];
+}
+
+.slide-title {
+  @apply mb-3 text-3xl font-semibold text-[var(--foreground)];
+}
+
+.slide-description {
+  @apply max-w-lg text-base text-[var(--text-muted)];
+}
+
+.dot {
+  @apply mx-1 h-3 w-3 rounded-full bg-[var(--text-muted)] opacity-50 transition-opacity cursor-pointer;
+}
+
+.dot.active {
+  @apply bg-[var(--primary)] opacity-100;
+}
+
+/* Modal styles */
+.modal-overlay {
+  @apply fixed inset-0 z-50 flex items-center justify-center bg-black/70;
+}
+
+.modal-content {
+  @apply w-full max-w-md rounded-2xl bg-[var(--neutral)] p-8 shadow-xl;
+}
+
+/* Chat app styles */
+.header {
+  @apply flex items-center justify-between border-b border-[var(--border)] bg-[var(--neutral)] px-6 py-4;
+}
+
+.sidebar {
+  @apply w-72 bg-[var(--neutral)] border-r border-[var(--border)] p-4 overflow-y-auto;
+}
+
+.peer-item, .group-item {
+  @apply flex items-center gap-3 w-full rounded-lg px-3 py-2 text-sm transition-colors cursor-pointer;
+}
+
+.peer-item:hover, .group-item:hover {
+  @apply bg-[var(--neutral-light)];
+}
+
+.peer-item.selected, .group-item.selected {
+  @apply bg-[var(--primary)] text-white;
+}
+
+.avatar {
+  @apply w-8 h-8 rounded-full bg-[var(--neutral-light)] flex items-center justify-center text-sm font-medium;
+}
+
+.message-bubble {
+  @apply max-w-[70%] rounded-2xl px-4 py-3 text-sm shadow-sm;
+}
+
+.message-mine {
+  @apply bg-[var(--primary)] text-white;
+}
+
+.message-other {
+  @apply bg-[var(--neutral-light)] text-[var(--foreground)];
+}
+
+.input-container {
+  @apply flex items-center gap-3 border-t border-[var(--border)] bg-[var(--neutral)] p-4;
 }
