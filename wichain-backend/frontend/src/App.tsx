@@ -21,6 +21,7 @@ import { Onboarding } from './components/Onboarding';
 import { OnboardingSlideshow } from './components/OnboardingSlideShow';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
+import { exit } from '@tauri-apps/plugin-process';
 import { motion } from 'framer-motion';
 
 type Target =
@@ -46,7 +47,7 @@ export default function App() {
     loadIdentity();
   }, [loadIdentity]);
 
-  // Groups (moved up to ensure refreshGroups is declared before use)
+  // Groups
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const refreshGroups = useCallback(() => {
     apiListGroups()
@@ -191,6 +192,15 @@ export default function App() {
     }
   };
 
+  // Exit application
+  const exitApp = async () => {
+    try {
+      await exit(0);
+    } catch (error) {
+      console.error('Failed to exit application:', error);
+    }
+  };
+
   // Derived data
   const myPub = identity?.public_key_b64 ?? '';
   const myAlias = identity?.alias ?? '(unknown)';
@@ -253,7 +263,7 @@ export default function App() {
         </div>
         <div className="flex items-center gap-3">
           <motion.button
-            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-dark)]"
+            className="rounded-lg bg-[var(--primary-dark)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--primary)]"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={openGroupModal}
@@ -261,12 +271,20 @@ export default function App() {
             New Group
           </motion.button>
           <motion.button
-            className="rounded-lg bg-[var(--neutral-light)] px-4 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-[var(--neutral)]"
+            className="rounded-lg bg-[var(--primary-dark)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--primary)]"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => setResetOpen(true)}
           >
             Reset Chat
+          </motion.button>
+          <motion.button
+            className="exit-button"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={exitApp}
+          >
+            Exit
           </motion.button>
         </div>
       </header>
@@ -324,7 +342,7 @@ export default function App() {
               transition={{ duration: 0.4 }}
             />
             <motion.button
-              className="rounded-lg bg-[var(--primary)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary-dark)] disabled:opacity-50"
+              className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={send}

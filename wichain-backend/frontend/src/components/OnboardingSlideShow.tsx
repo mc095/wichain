@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// Placeholder SVG icons (replace with actual assets in frontend/src/assets/)
 const icons = [
   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
@@ -77,19 +76,23 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
           <h2 className="slide-title">{slides[currentSlide].title}</h2>
           <p className="slide-description">{slides[currentSlide].description}</p>
           {currentSlide === slides.length - 1 ? (
-            <button
-              className="mt-6 rounded-full bg-[var(--primary)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-dark)]"
+            <motion.button
+              className="mt-6 rounded-full bg-[var(--primary-dark)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--primary)]"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={onGetStarted}
             >
               Get Started
-            </button>
+            </motion.button>
           ) : (
-            <button
-              className="mt-6 rounded-full bg-[var(--primary)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--primary-dark)]"
+            <motion.button
+              className="mt-6 rounded-full bg-[var(--primary-dark)] px-6 py-2 text-sm font-semibold text-white hover:bg-[var(--primary)]"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={nextSlide}
             >
               Next
-            </button>
+            </motion.button>
           )}
         </motion.div>
       </AnimatePresence>
@@ -103,8 +106,10 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
         ))}
       </div>
       {currentSlide > 0 && (
-        <button
-          className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-[var(--neutral-light)] p-2 text-white hover:bg-[var(--neutral)]"
+        <motion.button
+          className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-[var(--primary-dark)] p-2 text-white hover:bg-[var(--primary)]"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.9 }}
           onClick={prevSlide}
         >
           <svg
@@ -113,10 +118,11 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
+            strokeWidth={2}
           >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
-        </button>
+        </motion.button>
       )}
     </div>
   );
