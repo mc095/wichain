@@ -11,7 +11,7 @@
 //! `create_group`, `list_groups`, `add_group_message`, `get_chat_history`, `reset_data`.
 //!
 //! ### Events
-//! `peer_update`, `chat_update`, `alias_update`, `reset_done`.
+//! `peer_update`, `chat_update`, `alias_update`, `group_update`, `reset_done`.
 
 use std::{
     fs,
@@ -186,7 +186,7 @@ fn simple_obfuscate_json(my_pub: &str, other_pub: &str, clear_json: &str) -> Str
 fn simple_deobfuscate_json(my_pub: &str, other_pub: &str, b64_payload: &str) -> Option<String> {
     let bytes = general_purpose::STANDARD.decode(b64_payload.as_bytes()).ok()?;
     let mask = simple_pair_mask(my_pub, other_pub);
-    let clear = simple_xor(&bytes, & mask);
+    let clear = simple_xor(&bytes, &mask);
     String::from_utf8(clear).ok()
 }
 
@@ -253,12 +253,11 @@ fn clean_transport_payload(s: &str) -> &str {
 // -----------------------------------------------------------------------------
 // chat persistence
 // -----------------------------------------------------------------------------
-// Also update the now_ms() function:
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)  // Cast to u64
+        .map(|d| d.as_millis() as u64)
         .unwrap_or_default()
 }
 
@@ -342,6 +341,7 @@ async fn handle_incoming_network_payload(
                             // Create group locally if signature is valid
                             groups.create_group(group_create.body.members);
                             debug!("Group created locally: id={}", group_create.body.group_id);
+                            let _ = app.emit("group_update", ()); // Notify frontend
                         } else {
                             warn!("Group create signature INVALID from {}..", &network_from_b64[..8]);
                         }
@@ -385,6 +385,7 @@ async fn handle_incoming_network_payload(
                             if group_create.verify(&vk) {
                                 groups.create_group(group_create.body.members);
                                 debug!("Group created locally: id={}", group_create.body.group_id);
+                                let _ = app.emit("group_update", ()); // Notify frontend
                             } else {
                                 warn!("Group create signature INVALID from {}..", &p.id[..8]);
                             }
@@ -431,7 +432,6 @@ async fn handle_incoming_network_payload(
         sig_b64: String::new(),
     };
     record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
-    // No return needed here as this is the last case
 }
 
 // -----------------------------------------------------------------------------
@@ -528,6 +528,7 @@ async fn create_group(
 
     // Create group locally
     let group_id = state.groups.create_group(members.clone());
+    let _ = state.app.emit("group_update", ()); // Notify frontend
 
     // Prepare signed group creation message
     let group_create_body = GroupCreateBody {

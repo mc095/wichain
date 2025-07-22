@@ -111,9 +111,16 @@ export default function App() {
       .catch(console.error);
   }, []);
 
-  // initial load
+  // initial load and listen for group updates
   useEffect(() => {
     refreshGroups();
+    const unlistenPromise = listen('group_update', () => {
+      console.log('group_update event');
+      refreshGroups();
+    });
+    return () => {
+      unlistenPromise.then((un) => un());
+    };
   }, [refreshGroups]);
 
   /* ---------------- Chat History ---------------- */
