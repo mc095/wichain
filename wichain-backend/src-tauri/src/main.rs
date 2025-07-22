@@ -1,5 +1,3 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
-
 //! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ### Security notes
@@ -95,6 +93,51 @@ impl ChatSigned {
     }
 }
 
+/// Group creation message for network propagation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupCreateBody {
+    pub group_id: String,
+    pub members: Vec<String>,
+    pub ts_ms: u64,
+}
+
+/// Signed group creation message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupCreateSigned {
+    #[serde(flatten)]
+    pub body: GroupCreateBody,
+    pub sig_b64: String,
+}
+
+impl GroupCreateSigned {
+    pub fn new_signed(body: GroupCreateBody, sk: &SigningKey) -> Self {
+        let bytes = serde_json::to_vec(&body).expect("serialize group create body");
+        let sig = sk.sign(&bytes);
+        Self {
+            body,
+            sig_b64: general_purpose::STANDARD.encode(sig.to_bytes()),
+        }
+    }
+
+    pub fn verify(&self, vk: &VerifyingKey) -> bool {
+        let bytes = match serde_json::to_vec(&self.body) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let sig_bytes = match general_purpose::STANDARD.decode(&self.sig_b64) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        if sig_bytes.len() != 64 {
+            return false;
+        }
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&sig_bytes);
+        let sig = ed25519_dalek::Signature::from_bytes(&arr);
+        vk.verify_strict(&bytes, &sig).is_ok()
+    }
+}
+
 /// ---- application state -----------------------------------------------------
 pub struct AppState {
     pub app: AppHandle,
@@ -143,7 +186,7 @@ fn simple_obfuscate_json(my_pub: &str, other_pub: &str, clear_json: &str) -> Str
 fn simple_deobfuscate_json(my_pub: &str, other_pub: &str, b64_payload: &str) -> Option<String> {
     let bytes = general_purpose::STANDARD.decode(b64_payload.as_bytes()).ok()?;
     let mask = simple_pair_mask(my_pub, other_pub);
-    let clear = simple_xor(&bytes, &mask);
+    let clear = simple_xor(&bytes, & mask);
     String::from_utf8(clear).ok()
 }
 
@@ -259,8 +302,6 @@ async fn record_decrypted_chat(
 // inbound network handler
 // -----------------------------------------------------------------------------
 
-// Replace the existing handle_incoming_network_payload function with this fixed version
-
 async fn handle_incoming_network_payload(
     app: &AppHandle,
     blockchain: &Arc<Mutex<Blockchain>>,
@@ -270,6 +311,7 @@ async fn handle_incoming_network_payload(
     _network_to_b64: &str,
     payload_str: &str,
     node: &Arc<NetworkNode>,
+    groups: &Arc<GroupManager>,
 ) {
     let cleaned = clean_transport_payload(payload_str);
     debug!(
@@ -282,12 +324,33 @@ async fn handle_incoming_network_payload(
     // ---- 0. Try direct SHA3-XOR deobfuscation w/ reported 'from' ----
     if let Some(clear) = simple_deobfuscate_json(my_pub_b64, network_from_b64, cleaned) {
         debug!("inbound: deobf w/reported sender OK ({} bytes).", clear.len());
+        // Try parsing as ChatSigned
         if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
             record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
             return; // SUCCESS - exit early to prevent duplicate processing
-        } else {
-            debug!("inbound: deobf OK but JSON parse failed; trying fallbacks.");
         }
+        // Try parsing as GroupCreateSigned
+        if let Ok(group_create) = serde_json::from_str::<GroupCreateSigned>(&clear) {
+            debug!("inbound: parsed as GroupCreateSigned from {}..", &network_from_b64[..8]);
+            // Verify signature
+            if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(network_from_b64) {
+                if sender_pub_bytes.len() == 32 {
+                    if let Ok(vk) = VerifyingKey::from_bytes(
+                        <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
+                    ) {
+                        if group_create.verify(&vk) {
+                            // Create group locally if signature is valid
+                            groups.create_group(group_create.body.members);
+                            debug!("Group created locally: id={}", group_create.body.group_id);
+                        } else {
+                            warn!("Group create signature INVALID from {}..", &network_from_b64[..8]);
+                        }
+                    }
+                }
+            }
+            return; // SUCCESS - exit early
+        }
+        debug!("inbound: deobf OK but JSON parse failed; trying fallbacks.");
     } else {
         debug!("inbound: deobf w/reported sender FAILED; will brute peers.");
     }
@@ -299,13 +362,36 @@ async fn handle_incoming_network_payload(
             continue; // already tried above
         }
         if let Some(clear) = simple_deobfuscate_json(my_pub_b64, &p.id, cleaned) {
+            // Try parsing as ChatSigned
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
                 debug!(
                     "inbound: deobf succeeded w/ alt peer id={}..",
                     &p.id[..p.id.len().min(8)]
                 );
                 record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
-                return; // SUCCESS - exit early to prevent duplicate processing
+                return; // SUCCESS - exit early
+            }
+            // Try parsing as GroupCreateSigned
+            if let Ok(group_create) = serde_json::from_str::<GroupCreateSigned>(&clear) {
+                debug!(
+                    "inbound: parsed as GroupCreateSigned with alt peer id={}..",
+                    &p.id[..8]
+                );
+                if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&p.id) {
+                    if sender_pub_bytes.len() == 32 {
+                        if let Ok(vk) = VerifyingKey::from_bytes(
+                            <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
+                        ) {
+                            if group_create.verify(&vk) {
+                                groups.create_group(group_create.body.members);
+                                debug!("Group created locally: id={}", group_create.body.group_id);
+                            } else {
+                                warn!("Group create signature INVALID from {}..", &p.id[..8]);
+                            }
+                        }
+                    }
+                }
+                return; // SUCCESS - exit early
             }
         }
     }
@@ -430,7 +516,37 @@ async fn create_group(
     if members.is_empty() {
         return Err("group needs at least 1 member".into());
     }
-    Ok(state.groups.create_group(members))
+
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let my_sk = state.signing_key.lock().await.clone();
+
+    // Ensure creator is included in the group
+    let mut members = members;
+    if !members.contains(&my_pub) {
+        members.push(my_pub.clone());
+    }
+
+    // Create group locally
+    let group_id = state.groups.create_group(members.clone());
+
+    // Prepare signed group creation message
+    let group_create_body = GroupCreateBody {
+        group_id: group_id.clone(),
+        members: members.clone(),
+        ts_ms: now_ms(),
+    };
+    let group_create_signed = GroupCreateSigned::new_signed(group_create_body, &my_sk);
+    let clear_json = serde_json::to_string(&group_create_signed).unwrap();
+
+    // Send group creation to all members (except self)
+    for member in members.iter().filter(|m| *m != &my_pub) {
+        let obf_b64 = simple_obfuscate_json(&my_pub, member, &clear_json);
+        if let Err(e) = state.node.send_direct_block(member, obf_b64).await {
+            warn!("create_group: send_direct_block error -> {}: {e}", member);
+        }
+    }
+
+    Ok(group_id)
 }
 
 #[tauri::command]
@@ -631,6 +747,7 @@ fn main() {
                 let identity = Arc::clone(&identity);
                 let node_for_task = node.clone();
                 let app_handle_for_task = app.handle().clone();
+                let groups_for_task = groups.clone();
 
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = rx.recv().await {
@@ -649,6 +766,7 @@ fn main() {
                                     &to,
                                     &payload_json,
                                     &node_for_task,
+                                    &groups_for_task,
                                 )
                                 .await;
                             }
