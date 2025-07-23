@@ -1,8 +1,10 @@
-# WiChain: Decentralized LAN Chat with Blockchain-backed History
+# 🦀 WiChain: Decentralized LAN Chat with Blockchain-backed History
 
 WiChain is a unique peer-to-peer chat application designed for local area networks (LANs). It blends a modern desktop user interface built with React and Tauri with a tamper-evident blockchain ledger to store chat history, offering a robust and secure local communication solution.
 
-![video](https://raw.githubusercontent.com/mc095/wichain/main/public/demo-gif.gif)
+<div style="width: 100%; text-align: center;">
+    <img src="https://raw.githubusercontent.com/mc095/wichain/main/public/demo-gif.gif" alt="WiChain Demo" style="display: block; margin: 0 auto; width: 40%;">
+</div>
 
 ## ✨ Features
 
