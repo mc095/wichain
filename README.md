@@ -47,6 +47,10 @@ The project is structured into several Rust crates for clear separation of conce
   * **`wichain-backend`**: The main Tauri backend, orchestrating identity, blockchain, networking, group management, and message obfuscation.
   * **`wichain-backend/frontend`**: The React-based user interface, handling UI state, peer/group selection, chat, and real-time updates.
 
+
+## Explanation
+![Link](https://mc095.github.io/jsonparser/exp.html)
+
 ## 🔒 Security Model Highlights
 
   * **Authenticity**: All messages are signed with Ed25519.
