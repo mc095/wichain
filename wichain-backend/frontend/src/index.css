@@ -19,13 +19,29 @@ body {
 }
 
 
-/* Slideshow styles */
 .slideshow-container {
-  @apply relative flex h-screen w-full items-center justify-center overflow-hidden bg-[var(--background)];
-  background-image: url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" fill="none"%3E%3Cpath fill="%2344318D" opacity="0.2" d="M720 100c-100 0-180 80-180 180s80 180 180 180 180-80 180-180-80-180-180-180zm0 300c-66 0-120-54-120-120s54-120 120-120 120 54 120 120-54 120-120 120z"/%3E%3Ccircle cx="200" cy="150" r="20" fill="%23a0aec0" opacity="0.3"/%3E%3Ccircle cx="300" cy="600" r="15" fill="%23a0aec0" opacity="0.3"/%3E%3Ccircle cx="1100" cy="200" r="25" fill="%23a0aec0" opacity="0.3"/%3E%3Ccircle cx="1200" cy="700" r="18" fill="%23a0aec0" opacity="0.3"/%3E%3C/svg%3E');
+  @apply relative flex h-screen w-full items-center justify-center overflow-hidden;
+}
+
+.slideshow-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: url('/public/bg.jpg');
   background-size: cover;
   background-position: center;
+  filter: brightness(40%); /* Adjust the brightness value as needed */
+  z-index: -1; /* Ensure the pseudo-element stays behind the content */
 }
+
+.content-wrapper {
+  @apply relative z-10; /* Ensure the content stays above the pseudo-element */
+}
+
+
 
 .slide {
   @apply absolute flex flex-col items-center justify-center p-8 text-center;
@@ -86,15 +102,15 @@ body {
 }
 
 .message-bubble {
-  @apply max-w-[70%] rounded-2xl px-4 py-3 text-sm shadow-sm;
+  @apply max-w-xs rounded-2xl px-4 py-3 text-sm shadow-sm;
 }
 
 .message-mine {
-  @apply bg-[var(--primary)] text-white;
+  @apply bg-[var(--primary)] text-white rounded-tr-none;
 }
 
 .message-other {
-  @apply bg-[var(--neutral-light)] text-[var(--foreground)];
+  @apply bg-[var(--neutral-light)] text-[var(--foreground)] rounded-tl-none;
 }
 
 .input-container {

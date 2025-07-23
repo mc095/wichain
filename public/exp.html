@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiChain: Decentralized LAN Chat with Blockchain-backed History</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        pre {
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        code {
+            font-family: monospace;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <h1>WiChain: Decentralized LAN Chat with Blockchain-backed History</h1>
+    <h2>Overview</h2>
+    <p>WiChain is a peer-to-peer chat application for local networks (LAN) that combines a modern desktop UI (React + Tauri) with a tamper-evident blockchain ledger for chat history. It features:</p>
+    <ul>
+        <li><strong>Direct peer and group messaging</strong> over LAN (UDP, no central server)</li>
+        <li><strong>Signed, verifiable messages</strong> (Ed25519)</li>
+        <li><strong>Blockchain-backed chat history</strong> (append-only, tamper-evident)</li>
+        <li><strong>Ephemeral group chats</strong> (deterministic group IDs)</li>
+        <li><strong>Simple obfuscation</strong> for message confidentiality (SHA3-512 XOR, not real encryption)</li>
+        <li><strong>Trust scoring</strong> for peers</li>
+    </ul>
+    <p>This document provides a deep-dive into the technical implementation, architecture, and how blockchain is used in WiChain, with a step-by-step example.</p>
+    <h2>Architecture</h2>
+    <pre>
++-------------------+         +-------------------+
+|   Frontend (UI)   | &lt;----&gt; |   Tauri Backend   |
+|  React + TS + CSS |         |  Rust + Tauri     |
++-------------------+         +-------------------+
+         |                               |
+         |  Tauri API (invoke/emit)      |
+         v                               v
++-------------------+         +-------------------+
+|   Blockchain      |         |   Network (UDP)   |
+|   (Rust crate)    |         |   (Rust crate)    |
++-------------------+         +-------------------+
+         |                               |
+         +-------------------------------+
+         |      wichain-core/types        |
+         +-------------------------------+
+    </pre>
+    <h3>Project Flow Diagram</h3>
+    <img src="arch.png" alt="Project Flow Diagram" width="400">
+    <h2>Major Components & Files</h2>
+    <h3>1. wichain-blockchain</h3>
+    <ul>
+        <li><strong>block.rs</strong>: Defines the <code>Block</code> structure (index, timestamp, previous hash, nonce, data, hash). Data can be plain text, a JSON array of signed messages, or a direct message object.</li>
+        <li><strong>blockchain.rs</strong>: Defines the <code>Blockchain</code> struct (vector of blocks), methods for adding/validating blocks, saving/loading chain, and summarizing for UI.</li>
+        <li><strong>lib.rs</strong>: Exposes the blockchain API.</li>
+    </ul>
+    <h3>2. wichain-core</h3>
+    <ul>
+        <li><strong>message.rs</strong>: Defines <code>SignedMessage</code> (UUID, sender, recipient, timestamp, content, Ed25519 signature). Handles signing, verification, and legacy message support.</li>
+        <li><strong>trust.rs</strong>: Implements local trust scoring for peers (0–100, decays over time, increases with valid data).</li>
+        <li><strong>lib.rs</strong>: Exposes identity management, key encoding/decoding, and re-exports message/trust logic.</li>
+    </ul>
+    <h3>3. wichain-network</h3>
+    <ul>
+        <li><strong>lib.rs</strong>: Handles peer discovery (UDP broadcast), direct messaging (UDP unicast), peer tracking, and exposes network events to the backend.</li>
+    </ul>
+    <h3>4. wichain-backend</h3>
+    <ul>
+        <li><strong>src-tauri/src/main.rs</strong>: The main Tauri backend. Handles identity, blockchain, networking, group management, message obfuscation, and exposes Tauri commands/events.</li>
+        <li><strong>src-tauri/src/group_manager.rs</strong>: Manages ephemeral groups (IDs are SHA3-256 hashes of sorted member pubkeys).</li>
+        <li><strong>src-tauri/src/crypto_utils.rs</strong>: Simple SHA512-based XOR for message obfuscation (not strong encryption).</li>
+    </ul>
+    <h3>5. wichain-backend/frontend</h3>
+    <ul>
+        <li><strong>src/App.tsx</strong>: Main React app. Handles UI state, peer/group selection, chat, onboarding, and real-time updates.</li>
+        <li><strong>src/lib/api.ts</strong>: API bindings for Tauri backend commands (identity, peers, groups, chat, reset).</li>
+        <li><strong>src/components/</strong>: UI components for chat, peer list, onboarding, group modal, etc.</li>
+    </ul>
+    <h2>Data Flow & Message Lifecycle</h2>
+    <ol>
+        <li><strong>Identity</strong>: On first run, a user identity (Ed25519 keypair + alias) is generated and stored locally.</li>
+        <li><strong>Peer Discovery</strong>: Each node broadcasts its presence over UDP. Peers are tracked by pubkey and alias.</li>
+        <li><strong>Sending a Message</strong>:
+            <ul>
+                <li>User selects a peer or group and types a message.</li>
+                <li>The message is signed (Ed25519) and wrapped in a <code>ChatSigned</code> struct.</li>
+                <li>The message is obfuscated (SHA3-512 XOR of both pubkeys, then base64) for confidentiality.</li>
+                <li>The obfuscated message is sent over UDP directly to the peer(s).</li>
+                <li>The clear (signed) message is appended to the local blockchain.</li>
+            </ul>
+        </li>
+        <li><strong>Receiving a Message</strong>:
+            <ul>
+                <li>Incoming UDP payloads are deobfuscated using the local and sender’s pubkeys.</li>
+                <li>The backend verifies the signature.</li>
+                <li>The message is appended to the local blockchain.</li>
+                <li>The frontend is notified via a Tauri event.</li>
+            </ul>
+        </li>
+        <li><strong>Groups</strong>:
+            <ul>
+                <li>Groups are ephemeral, identified by a hash of sorted member pubkeys.</li>
+                <li>Group messages are signed, obfuscated per member, and sent to all group members.</li>
+            </ul>
+        </li>
+    </ol>
+    <h2>Blockchain in WiChain: How It Works</h2>
+    <ul>
+        <li><strong>Purpose</strong>: The blockchain is a local, append-only ledger of all chat activity. It provides tamper-evidence (not consensus or global state).</li>
+        <li><strong>Block Structure</strong>:
+            <ul>
+                <li><code>index</code>: Block number</li>
+                <li><code>timestamp_ms</code>: Milliseconds since epoch</li>
+                <li><code>previous_hash</code>: Hash of the previous block</li>
+                <li><code>nonce</code>: (unused, for compatibility)</li>
+                <li><code>data</code>: Opaque string (can be plain text, JSON array of signed messages, or direct message object)</li>
+                <li><code>hash</code>: SHA256(index || timestamp_ms || previous_hash || nonce || data)</li>
+            </ul>
+        </li>
+        <li><strong>Genesis Block</strong>: The first block is always a “Genesis Block.”</li>
+        <li><strong>Adding a Block</strong>: When a message is sent or received, a new block is created with the message data and linked to the previous block by hash.</li>
+        <li><strong>Validation</strong>: The chain can be validated by checking that each block’s <code>previous_hash</code> matches the actual hash of the previous block, and that each block’s hash is correct. Deep validation also verifies all embedded signatures.</li>
+        <li><strong>Persistence</strong>: The blockchain is saved as a JSON file on disk.</li>
+    </ul>
+    <h3>Example: Alice Sends a Message to Bob</h3>
+    <ol>
+        <li><strong>Alice</strong> types “Hi Bob!” and selects Bob as the peer.</li>
+        <li>The backend creates a <code>ChatBody</code>:
+            <pre>
+{
+  "from": "AlicePubKeyB64",
+  "to": "BobPubKeyB64",
+  "text": "Hi Bob!",
+  "ts_ms": 1712345678901
+}
+            </pre>
+        </li>
+        <li>The backend signs this with Alice’s private key, producing a <code>ChatSigned</code>:
+            <pre>
+{
+  "from": "AlicePubKeyB64",
+  "to": "BobPubKeyB64",
+  "text": "Hi Bob!",
+  "ts_ms": 1712345678901,
+  "sig_b64": "...base64 signature..."
+}
+            </pre>
+        </li>
+        <li>The message is obfuscated using SHA3-512 XOR of Alice and Bob’s pubkeys, then base64-encoded.</li>
+        <li>The obfuscated message is sent over UDP directly to Bob.</li>
+        <li>The clear (signed) message is appended to Alice’s local blockchain as a new block:
+            <pre>
+{
+  "index": 2,
+  "timestamp_ms": 1712345678901,
+  "previous_hash": "...",
+  "nonce": 0,
+  "data": "{\"from\":\"AlicePubKeyB64\",...}",
+  "hash": "..."
+}
+            </pre>
+        </li>
+        <li><strong>Bob</strong> receives the UDP packet, deobfuscates it, verifies the signature, and appends the message to his own blockchain.</li>
+        <li>Both Alice and Bob now have a tamper-evident record of the chat.</li>
+    </ol>
+    <h2>Security Model</h2>
+    <ul>
+        <li><strong>Authenticity</strong>: All messages are signed (Ed25519). Recipients can verify the sender.</li>
+        <li><strong>Confidentiality</strong>: Messages are obfuscated (SHA3-512 XOR), but this is not strong encryption—just basic privacy on the LAN.</li>
+        <li><strong>Integrity</strong>: The blockchain ensures that chat history cannot be tampered with undetectably.</li>
+        <li><strong>Trust</strong>: Each node tracks trust scores for peers, decaying over time and increasing with valid signed data.</li>
+        <li><strong>Groups</strong>: Group IDs are deterministic hashes of member pubkeys. Group messages are obfuscated per member.</li>
+    </ul>
+    <h2>More Technical Details</h2>
+    <h3>Message Obfuscation (Confidentiality)</h3>
+    <ul>
+        <li>WiChain uses a SHA3-512 hash of both users’ public keys to create a 64-byte mask.</li>
+        <li>The message is XOR’d with this mask and base64-encoded before being sent over UDP.</li>
+        <li>This is not strong encryption, but prevents casual snooping on the LAN.</li>
+    </ul>
+    <h3>Group Messaging</h3>
+    <ul>
+        <li>Groups are ephemeral and identified by a deterministic hash of sorted member public keys.</li>
+        <li>When sending a group message, the message is signed and obfuscated separately for each member, then sent directly to each peer.</li>
+    </ul>
+    <h3>Blockchain Validation</h3>
+    <ul>
+        <li>Each block’s hash is computed as SHA256(index || timestamp_ms || previous_hash || nonce || data).</li>
+        <li>The chain is validated by checking hash links and recomputing hashes.</li>
+        <li>Deep validation also verifies all embedded message signatures.</li>
+    </ul>
+    <h3>Trust System</h3>
+    <ul>
+        <li>Each peer is tracked with a trust score (0–100).</li>
+        <li>Trust increases with valid signed data, and decays over time if the peer is inactive.</li>
+        <li>Stale peers are dropped after a configurable period.</li>
+    </ul>
+    <h3>Security Limitations</h3>
+    <ul>
+        <li>There is no global consensus or distributed ledger—each node maintains its own local blockchain.</li>
+        <li>Obfuscation is not cryptographically secure; for real privacy, use proper encryption.</li>
+    </ul>
+    <h2>Development & Extensibility</h2>
+    <ul>
+        <li><strong>Rust Workspace</strong>: Modular crates for blockchain, core logic, networking, types, and backend.</li>
+        <li><strong>Frontend</strong>: Modern React + TailwindCSS, with Tauri for desktop integration.</li>
+        <li><strong>Easy to Extend</strong>: Add new message types, consensus, or real encryption as needed.</li>
+    </ul>
+    <h2>Quickstart</h2>
+    <ol>
+        <li>Build the Rust workspace (<code>cargo build</code> in <code>wichain/</code>).</li>
+        <li>Build the frontend (<code>npm install &amp;&amp; npm run build</code> in <code>wichain-backend/frontend/</code>).</li>
+        <li>Run the Tauri app (<code>cargo tauri dev</code> in <code>wichain-backend/</code>).</li>
+        <li>Open the app on two+ LAN devices and start chatting!</li>
+    </ol>
+    <h2>Credits & License</h2>
+    <ul>
+        <li>Open source, student-friendly, and designed for learning and experimentation.</li>
+        <li>Built with ❤️ using Rust, React, and Tauri.</li>
+    </ul>
+</body>
+</html>
