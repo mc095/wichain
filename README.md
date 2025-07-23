@@ -49,7 +49,7 @@ The project is structured into several Rust crates for clear separation of conce
 
 
 ## Explanation
-![Link](https://mc095.github.io/jsonparser/exp.html)
+[Link](https://mc095.github.io/jsonparser/exp.html)
 
 ## 🔒 Security Model Highlights
 
