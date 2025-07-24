@@ -61,8 +61,6 @@ The project is structured into several Rust crates for clear separation of conce
   * **Confidentiality**: Basic message obfuscation (SHA3-512 XOR) for LAN privacy.
   * **Integrity**: Local blockchain ensures chat history cannot be tampered with undetectably.
 
-**Note**: WiChain's obfuscation is not strong encryption. For robust privacy, consider integrating a more secure encryption scheme. There is no global consensus; each node maintains its own local blockchain.
-
 ## 🚀 Quickstart
 
 1.  **Build Rust workspace**: Navigate to the `wichain/` directory and run `cargo build`.
@@ -70,6 +68,6 @@ The project is structured into several Rust crates for clear separation of conce
 3.  **Run Tauri App**: From the `wichain-backend/` directory, run `cargo tauri dev`.
 4.  Open the application on two or more devices connected to the same LAN and start chatting\!
 
-## ❤️ Credits & License
+## ❤️ Credits 
 
 WiChain is an open-source project designed for learning and experimentation, built with Rust, React, and Tauri. It's student-friendly and perfect for exploring decentralized chat and blockchain principles.
