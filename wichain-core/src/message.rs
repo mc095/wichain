@@ -236,3 +236,4 @@ mod tests {
         let _ = sm;
     }
 }
+// message.rs
