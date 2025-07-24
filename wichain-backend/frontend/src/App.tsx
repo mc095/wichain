@@ -144,7 +144,10 @@ export default function App() {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
-    console.log('send(): sending', { msg, target });
+    // Debug log for imageB64
+    if (imageB64) {
+      console.log('Sending imageB64 length:', imageB64.length);
+    }
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
@@ -174,8 +177,19 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // Remove data URL prefix if present
-      const base64 = result.split(',')[1] || result;
+      let base64: string;
+      if (result.startsWith('data:')) {
+        const parts = result.split(',');
+        base64 = parts.length > 1 ? parts[1] : parts[0];
+      } else {
+        base64 = result;
+      }
+      if (!base64 || base64.length < 10) {
+        alert('Failed to read image data.');
+        setImageB64(null);
+        setImagePreview(null);
+        return;
+      }
       setImageB64(base64);
       setImagePreview(result);
     };
