@@ -52,7 +52,7 @@ pub struct StoredIdentity {
 pub struct ChatBody {
     pub from: String,        // sender pubkey b64
     pub to: Option<String>,  // receiver pubkey b64 OR group_id
-    pub text: String,        // UTF-8
+    pub text: String,        // UTF‑8
     pub ts_ms: u64,         // unix ms
 }
 
@@ -468,38 +468,29 @@ async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, S
     Ok(peers.into_iter().filter(|p| p.id != my_id).collect())
 }
 
-#[derive(Deserialize, Debug)]
-struct ChatMessageInput {
-    content: String,
-    to_peer: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct GroupMessageInput {
-    content: String,
-    group_id: String,
-}
-
 #[tauri::command]
 async fn add_chat_message(
     state: tauri::State<'_, AppState>,
-    input: ChatMessageInput,
+    content: String,
+    to_peer: String,
 ) -> Result<(), String> {
-    log::debug!("add_chat_message: input = {:?}", input);
-    let peer_id = input.to_peer.trim();
+    let peer_id = to_peer.trim();
     if peer_id.is_empty() {
         return Err("peer required".into());
     }
+
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
+
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
-        text: input.content.clone(),
+        text: content.clone(),
         ts_ms: now_ms(),
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
+
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
@@ -507,15 +498,13 @@ async fn add_chat_message(
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
+
     // obfuscate + send
     let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
-    if obf_b64.len() > 8192 {
-        warn!("Message too large to send over UDP ({} bytes)", obf_b64.len());
-        return Err("Message too large to send over LAN. Try a smaller image or shorter text.".into());
-    }
     if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
         warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
     }
+
     Ok(())
 }
 
@@ -553,10 +542,6 @@ async fn create_group(
     // Send group creation to all members (except self)
     for member in members.iter().filter(|m| *m != &my_pub) {
         let obf_b64 = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if obf_b64.len() > 8192 {
-            warn!("Group message too large to send over UDP ({} bytes) to {}", obf_b64.len(), member);
-            continue;
-        }
         if let Err(e) = state.node.send_direct_block(member, obf_b64).await {
             warn!("create_group: send_direct_block error -> {}: {e}", member);
         }
@@ -573,22 +558,24 @@ async fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<GroupInfo>
 #[tauri::command]
 async fn add_group_message(
     state: tauri::State<'_, AppState>,
-    input: GroupMessageInput,
+    content: String,
+    group_id: String,
 ) -> Result<(), String> {
-    log::debug!("add_group_message: input = {:?}", input);
-    let group = state.groups.get_group(&input.group_id).ok_or("unknown group")?;
+    let group = state.groups.get_group(&group_id).ok_or("unknown group")?;
     let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
         let body = ChatBody {
             from: id.public_key_b64.clone(),
-            to: Some(input.group_id.clone()),
-            text: input.content.clone(),
+            to: Some(group_id.clone()),
+            text: content.clone(),
             ts_ms: now_ms(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };
+
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
+
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
@@ -596,17 +583,15 @@ async fn add_group_message(
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
-    // fan-out: obfuscate uniquely per member
+
+    // fan‑out: obfuscate uniquely per member
     for member in group.members.iter().filter(|m| *m != &my_pub) {
         let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if obf.len() > 8192 {
-            warn!("Group message too large to send over UDP ({} bytes) to {}", obf.len(), member);
-            continue;
-        }
         if let Err(e) = state.node.send_direct_block(member, obf).await {
             warn!("group send error -> {}: {e}", member);
         }
     }
+
     Ok(())
 }
 

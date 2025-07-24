@@ -21,6 +21,7 @@ import { Onboarding } from './components/Onboarding';
 import { OnboardingSlideshow } from './components/OnboardingSlideShow';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
+import { exit } from '@tauri-apps/plugin-process';
 import { motion } from 'framer-motion';
 
 type Target =
@@ -33,11 +34,6 @@ export default function App() {
   const [showSlideshow, setShowSlideshow] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Remove all image-related state
-  // Remove imageB64, imagePreview, handleFileChange, and image preview UI
-  // Only allow sending text messages
-  // In the send function, remove all references to imageB64 and only send text
-  // In the input area, remove the file input and preview
 
   const loadIdentity = useCallback(async () => {
     const id = await apiGetIdentity();
@@ -146,9 +142,7 @@ export default function App() {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
-    console.log('Send function: text length =', msg.length);
-    // Debug log for outgoing payload
-    console.log('Sending payload:', { msg });
+    console.log('send(): sending', { msg, target });
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
@@ -195,6 +189,15 @@ export default function App() {
     if (gid) {
       await refreshGroups();
       setTarget({ kind: 'group', id: gid });
+    }
+  };
+
+  // Exit application
+  const exitApp = async () => {
+    try {
+      await exit(0);
+    } catch (error) {
+      console.error('Failed to exit application:', error);
     }
   };
 
@@ -255,7 +258,7 @@ export default function App() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </motion.button>
-          <h1 className="text-2xl font-bold text-violet-600">WiChain</h1>
+          <h1 className="text-2xl font-bold text-[var(--primary)]">WiChain</h1>
           <span className="text-sm text-[var(--text-muted)]">{myAlias}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -274,6 +277,14 @@ export default function App() {
             onClick={() => setResetOpen(true)}
           >
             Reset Chat
+          </motion.button>
+          <motion.button
+            className="exit-button"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={exitApp}
+          >
+            Exit
           </motion.button>
         </div>
       </header>
@@ -312,35 +323,33 @@ export default function App() {
             aliasMap={aliasMap}
             groups={groups}
           />
-          <div className="input-container flex flex-col gap-2">
-            <div className="flex gap-2">
-              <motion.input
-                type="text"
-                placeholder={target ? targetLabel : 'Select a peer or group to start'}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                disabled={sending || !target || !identity}
-                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--neutral)] px-4 py-3 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-              />
-              <motion.button
-                className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={send}
-                disabled={sending || !text.trim() || !target || !identity}
-              >
-                Send
-              </motion.button>
-            </div>
+          <div className="input-container">
+            <motion.input
+              type="text"
+              placeholder={target ? targetLabel : 'Select a peer or group to start'}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              disabled={sending || !target || !identity}
+              className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--neutral)] px-4 py-3 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
+            />
+            <motion.button
+              className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={send}
+              disabled={sending || !text.trim() || !target || !identity}
+            >
+              Send
+            </motion.button>
           </div>
         </section>
       </div>

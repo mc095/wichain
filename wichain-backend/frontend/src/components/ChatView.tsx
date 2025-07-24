@@ -107,48 +107,35 @@ export function ChatView({
 
   return (
     <div className="flex-1 overflow-y-auto p-6 bg-[var(--background)]">
-      {chatItems.map((c) => {
-        // Find the original message to get image_b64
-        const msg = messages.find(m => m.ts_ms === c.ts && m.from === c.from && m.text === c.text);
-        const imageB64 = msg?.image_b64;
-        return (
-          <motion.div
-            key={c.key}
-            className={`mb-4 flex w-full ${c.mine ? 'justify-end' : 'justify-start'}`}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-          >
-            <div className="flex items-start gap-3 max-w-[70%]">
-              {!c.mine && (
-                <div className="avatar">{c.fromAlias.charAt(0).toUpperCase()}</div>
-              )}
-              <div
-                className={`message-bubble ${c.mine ? 'message-mine' : 'message-other'}`}
-              >
-                {(c.isGroup || !c.mine) && (
-                  <div className="mb-1 text-xs text-[var(--text-muted)]">
-                    {c.fromAlias}
-                    {c.isGroup ? ' · Group' : ''}
-                  </div>
-                )}
-                <p>{c.text}</p>
-                {imageB64 && (
-                  <img
-                    src={`data:image/*;base64,${imageB64}`}
-                    alt="sent-img"
-                    className="mt-2 max-h-48 rounded border"
-                    style={{ maxWidth: '100%' }}
-                  />
-                )}
-                <div className="mt-1 text-xs text-[var(--text-muted)] opacity-70">
-                  {new Date(c.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+      {chatItems.map((c) => (
+        <motion.div
+          key={c.key}
+          className={`mb-4 flex w-full ${c.mine ? 'justify-end' : 'justify-start'}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <div className="flex items-start gap-3 max-w-[70%]">
+            {!c.mine && (
+              <div className="avatar">{c.fromAlias.charAt(0).toUpperCase()}</div>
+            )}
+            <div
+              className={`message-bubble ${c.mine ? 'message-mine' : 'message-other'}`}
+            >
+              {(c.isGroup || !c.mine) && (
+                <div className="mb-1 text-xs text-[var(--text-muted)]">
+                  {c.fromAlias}
+                  {c.isGroup ? ' · Group' : ''}
                 </div>
+              )}
+              <p>{c.text}</p>
+              <div className="mt-1 text-xs text-[var(--text-muted)] opacity-70">
+                {new Date(c.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>
             </div>
-          </motion.div>
-        );
-      })}
+          </div>
+        </motion.div>
+      ))}
       <div ref={endRef} />
     </div>
   );
