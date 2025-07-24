@@ -12,7 +12,7 @@ WiChain is a unique peer-to-peer chat application designed for local area networ
   * **Signed, Verifiable Messages**: All messages are signed using Ed25519, allowing recipients to verify the sender's authenticity.
   * **Blockchain-backed Chat History**: Each node maintains a local, append-only blockchain, providing a tamper-evident record of all chat activity.
   * **Ephemeral Group Chats**: Create temporary group chats with deterministic group IDs based on sorted member public keys.
-  * **Simple Message Obfuscation**: Messages are lightly obfuscated using SHA3-512 XOR for basic confidentiality on the LAN (note: this is not strong encryption).
+  * **Simple Message Obfuscation**: Messages are lightly obfuscated using SHA3-512 XOR for basic confidentiality on the LAN.
   * **Trust Scoring**: Each peer locally tracks trust scores for other participants, increasing with valid data and decaying over time.
 
 ## Overview
