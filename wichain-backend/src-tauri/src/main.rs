@@ -486,6 +486,7 @@ async fn add_chat_message(
     to_peer: String,
     image_b64: Option<String>,
 ) -> Result<(), String> {
+    log::debug!("add_chat_message: content='{}', to_peer='{}', image_b64_len={}", content, to_peer, image_b64.as_ref().map(|s| s.len()).unwrap_or(0));
     let peer_id = to_peer.trim();
     if peer_id.is_empty() {
         return Err("peer required".into());
@@ -502,7 +503,7 @@ async fn add_chat_message(
         to: Some(peer_id.to_string()),
         text: content.clone(),
         ts_ms: now_ms(),
-        image_b64,
+        image_b64: image_b64.clone(),
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
@@ -575,6 +576,7 @@ async fn add_group_message(
     group_id: String,
     image_b64: Option<String>,
 ) -> Result<(), String> {
+    log::debug!("add_group_message: content='{}', group_id='{}', image_b64_len={}", content, group_id, image_b64.as_ref().map(|s| s.len()).unwrap_or(0));
     let group = state.groups.get_group(&group_id).ok_or("unknown group")?;
     if let Some(ref img) = image_b64 {
         if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
@@ -589,7 +591,7 @@ async fn add_group_message(
             to: Some(group_id.clone()),
             text: content.clone(),
             ts_ms: now_ms(),
-            image_b64,
+            image_b64: image_b64.clone(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };

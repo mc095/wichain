@@ -122,12 +122,14 @@ export async function apiAddPeerMessage(
       console.warn('apiAddPeerMessage: empty peerId');
       return false;
     }
-    await invoke('add_chat_message', {
+    const payload = {
       content: text,
       to_peer: pid, // new backend
       toPeer: pid,  // older backend
-      image_b64,
-    });
+      image_b64: image_b64 ?? null,
+    };
+    console.log('apiAddPeerMessage payload:', payload);
+    await invoke('add_chat_message', payload);
     return true;
   } catch (err) {
     console.error('add_chat_message failed', err);
@@ -147,12 +149,14 @@ export async function apiAddGroupMessage(
       console.warn('apiAddGroupMessage: empty groupId');
       return false;
     }
-    await invoke('add_group_message', {
+    const payload = {
       content: text,
       group_id: gid, // new backend
       groupId: gid,  // older backend
-      image_b64,
-    });
+      image_b64: image_b64 ?? null,
+    };
+    console.log('apiAddGroupMessage payload:', payload);
+    await invoke('add_group_message', payload);
     return true;
   } catch (err) {
     console.error('add_group_message failed', err);
