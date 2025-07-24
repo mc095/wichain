@@ -21,7 +21,7 @@ import { Onboarding } from './components/Onboarding';
 import { OnboardingSlideshow } from './components/OnboardingSlideShow';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
-import { exit } from '@tauri-apps/plugin-process';
+
 import { motion } from 'framer-motion';
 
 type Target =
@@ -192,14 +192,7 @@ export default function App() {
     }
   };
 
-  // Exit application
-  const exitApp = async () => {
-    try {
-      await exit(0);
-    } catch (error) {
-      console.error('Failed to exit application:', error);
-    }
-  };
+
 
   // Derived data
   const myPub = identity?.public_key_b64 ?? '';
@@ -258,7 +251,7 @@ export default function App() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </motion.button>
-          <h1 className="text-2xl font-bold text-[var(--primary)]">WiChain</h1>
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent drop-shadow">WiChain</h1>
           <span className="text-sm text-[var(--text-muted)]">{myAlias}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -277,14 +270,6 @@ export default function App() {
             onClick={() => setResetOpen(true)}
           >
             Reset Chat
-          </motion.button>
-          <motion.button
-            className="exit-button"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={exitApp}
-          >
-            Exit
           </motion.button>
         </div>
       </header>

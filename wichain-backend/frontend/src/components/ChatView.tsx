@@ -106,7 +106,9 @@ export function ChatView({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 bg-[var(--background)]">
+    <div className="flex-1 overflow-y-auto p-6 bg-[var(--background)] scrollbar-none" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+      {/* Hide scrollbar for Webkit browsers */}
+      <style>{`.scrollbar-none::-webkit-scrollbar { display: none; }`}</style>
       {chatItems.map((c) => (
         <motion.div
           key={c.key}
