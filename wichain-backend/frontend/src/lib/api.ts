@@ -129,7 +129,7 @@ export async function apiAddPeerMessage(
       image_b64: image_b64 ?? null,
     };
     console.log('apiAddPeerMessage payload:', payload);
-    await invoke('add_chat_message', payload);
+    await invoke('add_chat_message', { input: payload });
     return true;
   } catch (err) {
     console.error('add_chat_message failed', err);
@@ -156,7 +156,7 @@ export async function apiAddGroupMessage(
       image_b64: image_b64 ?? null,
     };
     console.log('apiAddGroupMessage payload:', payload);
-    await invoke('add_group_message', payload);
+    await invoke('add_group_message', { input: payload });
     return true;
   } catch (err) {
     console.error('add_group_message failed', err);
