@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   apiGetIdentity,
   apiSetAlias,
@@ -34,6 +34,8 @@ export default function App() {
   const [showSlideshow, setShowSlideshow] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [imageB64, setImageB64] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
 
   const loadIdentity = useCallback(async () => {
     const id = await apiGetIdentity();
@@ -134,8 +136,8 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
-    if (!msg || !target) {
-      console.warn('send(): no message or no target');
+    if ((!msg && !imageB64) || !target) {
+      console.warn('send(): no message, no image, or no target');
       return;
     }
     if (!identity) {
@@ -146,18 +148,39 @@ export default function App() {
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
-      ok = await apiAddPeerMessage(msg, target.id);
+      ok = await apiAddPeerMessage(msg, target.id, imageB64);
     } else if (target.kind === 'group') {
-      ok = await apiAddGroupMessage(msg, target.id);
+      ok = await apiAddGroupMessage(msg, target.id, imageB64);
     }
     setSending(false);
     if (ok) {
       setText('');
+      setImageB64(null);
+      setImagePreview(null);
       refreshMessages();
     } else {
       console.warn('Send failed (see backend log).');
     }
-  }, [text, target, identity, refreshMessages]);
+  }, [text, target, identity, refreshMessages, imageB64]);
+
+  // Handle file input change
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 100 * 1024) {
+      alert('Image too large (max 100KB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Remove data URL prefix if present
+      const base64 = result.split(',')[1] || result;
+      setImageB64(base64);
+      setImagePreview(result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -323,33 +346,58 @@ export default function App() {
             aliasMap={aliasMap}
             groups={groups}
           />
-          <div className="input-container">
-            <motion.input
-              type="text"
-              placeholder={target ? targetLabel : 'Select a peer or group to start'}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              disabled={sending || !target || !identity}
-              className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--neutral)] px-4 py-3 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
-            />
-            <motion.button
-              className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={send}
-              disabled={sending || !text.trim() || !target || !identity}
-            >
-              Send
-            </motion.button>
+          <div className="input-container flex flex-col gap-2">
+            {imagePreview && (
+              <div className="mb-2 flex items-center gap-2">
+                <img src={imagePreview} alt="preview" className="max-h-24 rounded border" />
+                <button
+                  className="text-xs text-red-500 underline"
+                  onClick={() => { setImageB64(null); setImagePreview(null); }}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <motion.input
+                type="text"
+                placeholder={target ? targetLabel : 'Select a peer or group to start'}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                disabled={sending || !target || !identity}
+                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--neutral)] px-4 py-3 text-sm text-[var(--foreground)] placeholder-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+              />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                disabled={sending || !target || !identity}
+                className="file-input"
+                style={{ display: 'none' }}
+                id="image-upload-input"
+              />
+              <label htmlFor="image-upload-input" className="cursor-pointer px-2 py-2 bg-[var(--primary-dark)] text-white rounded-lg hover:bg-[var(--primary)] text-sm flex items-center">
+                📷
+              </label>
+              <motion.button
+                className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={send}
+                disabled={sending || (!text.trim() && !imageB64) || !target || !identity}
+              >
+                Send
+              </motion.button>
+            </div>
           </div>
         </section>
       </div>

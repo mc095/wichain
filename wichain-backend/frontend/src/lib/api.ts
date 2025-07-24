@@ -31,6 +31,7 @@ export interface ChatBody {
   to?: string | null;
   text: string;
   ts_ms: number;
+  image_b64?: string | null; // base64-encoded image (optional)
 }
 
 /**
@@ -113,6 +114,7 @@ export async function apiListGroups(): Promise<GroupInfo[]> {
 export async function apiAddPeerMessage(
   text: string,
   peerId: string,
+  image_b64?: string | null,
 ): Promise<boolean> {
   try {
     const pid = peerId?.trim();
@@ -124,6 +126,7 @@ export async function apiAddPeerMessage(
       content: text,
       to_peer: pid, // new backend
       toPeer: pid,  // older backend
+      image_b64,
     });
     return true;
   } catch (err) {
@@ -136,6 +139,7 @@ export async function apiAddPeerMessage(
 export async function apiAddGroupMessage(
   text: string,
   groupId: string,
+  image_b64?: string | null,
 ): Promise<boolean> {
   try {
     const gid = groupId?.trim();
@@ -147,6 +151,7 @@ export async function apiAddGroupMessage(
       content: text,
       group_id: gid, // new backend
       groupId: gid,  // older backend
+      image_b64,
     });
     return true;
   } catch (err) {

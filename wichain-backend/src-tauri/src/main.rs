@@ -39,6 +39,9 @@ const WICHAIN_PORT: u16 = 60000;
 const BLOCKCHAIN_FILE: &str = "blockchain.json";
 const IDENTITY_FILE: &str = "identity.json";
 
+// Set ideal image size limit (100KB)
+const MAX_IMAGE_SIZE: usize = 100 * 1024; // 100KB
+
 /// ---- stored identity -------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredIdentity {
@@ -52,8 +55,9 @@ pub struct StoredIdentity {
 pub struct ChatBody {
     pub from: String,        // sender pubkey b64
     pub to: Option<String>,  // receiver pubkey b64 OR group_id
-    pub text: String,        // UTF‑8
+    pub text: String,        // UTF-8
     pub ts_ms: u64,         // unix ms
+    pub image_b64: Option<String>, // base64-encoded image (optional)
 }
 
 /// Signed body (plaintext + Ed25519 sig).
@@ -428,6 +432,7 @@ async fn handle_incoming_network_payload(
             to: Some(my_pub_b64.to_string()),
             text: format!("[UNREADABLE] {}", short),
             ts_ms: now_ms(),
+            image_b64: None,
         },
         sig_b64: String::new(),
     };
@@ -473,24 +478,28 @@ async fn add_chat_message(
     state: tauri::State<'_, AppState>,
     content: String,
     to_peer: String,
+    image_b64: Option<String>,
 ) -> Result<(), String> {
     let peer_id = to_peer.trim();
     if peer_id.is_empty() {
         return Err("peer required".into());
     }
-
+    if let Some(ref img) = image_b64 {
+        if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
+            return Err("Image too large (max 100KB)".into());
+        }
+    }
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
-
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
         text: content.clone(),
         ts_ms: now_ms(),
+        image_b64,
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
-
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
@@ -498,13 +507,11 @@ async fn add_chat_message(
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
-
     // obfuscate + send
     let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
     if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
         warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
     }
-
     Ok(())
 }
 
@@ -560,8 +567,14 @@ async fn add_group_message(
     state: tauri::State<'_, AppState>,
     content: String,
     group_id: String,
+    image_b64: Option<String>,
 ) -> Result<(), String> {
     let group = state.groups.get_group(&group_id).ok_or("unknown group")?;
+    if let Some(ref img) = image_b64 {
+        if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
+            return Err("Image too large (max 100KB)".into());
+        }
+    }
     let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
@@ -570,12 +583,11 @@ async fn add_group_message(
             to: Some(group_id.clone()),
             text: content.clone(),
             ts_ms: now_ms(),
+            image_b64,
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };
-
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
-
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
@@ -583,15 +595,13 @@ async fn add_group_message(
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
-
-    // fan‑out: obfuscate uniquely per member
+    // fan-out: obfuscate uniquely per member
     for member in group.members.iter().filter(|m| *m != &my_pub) {
         let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
         if let Err(e) = state.node.send_direct_block(member, obf).await {
             warn!("group send error -> {}: {e}", member);
         }
     }
-
     Ok(())
 }
 
