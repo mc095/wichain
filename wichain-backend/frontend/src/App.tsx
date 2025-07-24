@@ -144,16 +144,14 @@ export default function App() {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
-    // Debug log for imageB64
-    if (imageB64) {
-      console.log('Sending imageB64 length:', imageB64.length);
-    }
+    // Debug log for outgoing payload
+    console.log('Sending payload:', { msg, imageB64 });
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
-      ok = await apiAddPeerMessage(msg, target.id, imageB64);
+      ok = await apiAddPeerMessage(msg, target.id, imageB64 ?? null);
     } else if (target.kind === 'group') {
-      ok = await apiAddGroupMessage(msg, target.id, imageB64);
+      ok = await apiAddGroupMessage(msg, target.id, imageB64 ?? null);
     }
     setSending(false);
     if (ok) {
