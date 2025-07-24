@@ -169,8 +169,8 @@ export default function App() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 100 * 1024) {
-      alert('Image too large (max 100KB)');
+    if (file.size > 16 * 1024) {
+      alert('Image too large (max 16KB)');
       return;
     }
     const reader = new FileReader();
