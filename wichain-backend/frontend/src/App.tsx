@@ -144,6 +144,7 @@ export default function App() {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
+    console.log('Send function: imageB64 length =', imageB64 ? imageB64.length : 0);
     // Debug log for outgoing payload
     console.log('Sending payload:', { msg, imageB64 });
     setSending(true);
@@ -188,6 +189,7 @@ export default function App() {
         setImagePreview(null);
         return;
       }
+      console.log('File input handler: imageB64 length =', base64.length);
       setImageB64(base64);
       setImagePreview(result);
     };
