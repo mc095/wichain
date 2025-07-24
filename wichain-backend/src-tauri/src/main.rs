@@ -479,21 +479,33 @@ async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, S
     Ok(peers.into_iter().filter(|p| p.id != my_id).collect())
 }
 
-#[tauri::command]
-async fn add_chat_message(
-    state: tauri::State<'_, AppState>,
+#[derive(Deserialize, Debug)]
+struct ChatMessageInput {
     content: String,
     to_peer: String,
     image_b64: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GroupMessageInput {
+    content: String,
+    group_id: String,
+    image_b64: Option<String>,
+}
+
+#[tauri::command]
+async fn add_chat_message(
+    state: tauri::State<'_, AppState>,
+    input: ChatMessageInput,
 ) -> Result<(), String> {
-    log::debug!("add_chat_message: content='{}', to_peer='{}', image_b64_len={}", content, to_peer, image_b64.as_ref().map(|s| s.len()).unwrap_or(0));
-    let peer_id = to_peer.trim();
+    log::debug!("add_chat_message: input = {:?}", input);
+    let peer_id = input.to_peer.trim();
     if peer_id.is_empty() {
         return Err("peer required".into());
     }
-    if let Some(ref img) = image_b64 {
+    if let Some(ref img) = input.image_b64 {
         if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
-            return Err("Image too large (max 100KB)".into());
+            return Err("Image too large (max 16KB)".into());
         }
     }
     let my_pub = state.identity.lock().await.public_key_b64.clone();
@@ -501,9 +513,9 @@ async fn add_chat_message(
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
-        text: content.clone(),
+        text: input.content.clone(),
         ts_ms: now_ms(),
-        image_b64: image_b64.clone(),
+        image_b64: input.image_b64.clone(),
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
@@ -572,15 +584,13 @@ async fn list_groups(state: tauri::State<'_, AppState>) -> Result<Vec<GroupInfo>
 #[tauri::command]
 async fn add_group_message(
     state: tauri::State<'_, AppState>,
-    content: String,
-    group_id: String,
-    image_b64: Option<String>,
+    input: GroupMessageInput,
 ) -> Result<(), String> {
-    log::debug!("add_group_message: content='{}', group_id='{}', image_b64_len={}", content, group_id, image_b64.as_ref().map(|s| s.len()).unwrap_or(0));
-    let group = state.groups.get_group(&group_id).ok_or("unknown group")?;
-    if let Some(ref img) = image_b64 {
+    log::debug!("add_group_message: input = {:?}", input);
+    let group = state.groups.get_group(&input.group_id).ok_or("unknown group")?;
+    if let Some(ref img) = input.image_b64 {
         if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
-            return Err("Image too large (max 100KB)".into());
+            return Err("Image too large (max 16KB)".into());
         }
     }
     let (my_pub, chat_signed) = {
@@ -588,10 +598,10 @@ async fn add_group_message(
         let sk = state.signing_key.lock().await;
         let body = ChatBody {
             from: id.public_key_b64.clone(),
-            to: Some(group_id.clone()),
-            text: content.clone(),
+            to: Some(input.group_id.clone()),
+            text: input.content.clone(),
             ts_ms: now_ms(),
-            image_b64: image_b64.clone(),
+            image_b64: input.image_b64.clone(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };
