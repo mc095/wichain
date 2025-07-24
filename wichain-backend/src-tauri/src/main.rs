@@ -57,7 +57,6 @@ pub struct ChatBody {
     pub to: Option<String>,  // receiver pubkey b64 OR group_id
     pub text: String,        // UTF-8
     pub ts_ms: u64,         // unix ms
-    pub image_b64: Option<String>, // base64-encoded image (optional)
 }
 
 /// Signed body (plaintext + Ed25519 sig).
@@ -438,7 +437,6 @@ async fn handle_incoming_network_payload(
             to: Some(my_pub_b64.to_string()),
             text: format!("[UNREADABLE] {}", short),
             ts_ms: now_ms(),
-            image_b64: None,
         },
         sig_b64: String::new(),
     };
@@ -483,14 +481,12 @@ async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, S
 struct ChatMessageInput {
     content: String,
     to_peer: String,
-    image_b64: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
 struct GroupMessageInput {
     content: String,
     group_id: String,
-    image_b64: Option<String>,
 }
 
 #[tauri::command]
@@ -503,11 +499,6 @@ async fn add_chat_message(
     if peer_id.is_empty() {
         return Err("peer required".into());
     }
-    if let Some(ref img) = input.image_b64 {
-        if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
-            return Err("Image too large (max 16KB)".into());
-        }
-    }
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
     let body = ChatBody {
@@ -515,7 +506,6 @@ async fn add_chat_message(
         to: Some(peer_id.to_string()),
         text: input.content.clone(),
         ts_ms: now_ms(),
-        image_b64: input.image_b64.clone(),
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
@@ -528,6 +518,10 @@ async fn add_chat_message(
     let _ = state.app.emit("chat_update", ());
     // obfuscate + send
     let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
+    if obf_b64.len() > 8192 {
+        warn!("Message too large to send over UDP ({} bytes)", obf_b64.len());
+        return Err("Message too large to send over LAN. Try a smaller image or shorter text.".into());
+    }
     if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
         warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
     }
@@ -568,6 +562,10 @@ async fn create_group(
     // Send group creation to all members (except self)
     for member in members.iter().filter(|m| *m != &my_pub) {
         let obf_b64 = simple_obfuscate_json(&my_pub, member, &clear_json);
+        if obf_b64.len() > 8192 {
+            warn!("Group message too large to send over UDP ({} bytes) to {}", obf_b64.len(), member);
+            continue;
+        }
         if let Err(e) = state.node.send_direct_block(member, obf_b64).await {
             warn!("create_group: send_direct_block error -> {}: {e}", member);
         }
@@ -588,11 +586,6 @@ async fn add_group_message(
 ) -> Result<(), String> {
     log::debug!("add_group_message: input = {:?}", input);
     let group = state.groups.get_group(&input.group_id).ok_or("unknown group")?;
-    if let Some(ref img) = input.image_b64 {
-        if img.len() * 3 / 4 > MAX_IMAGE_SIZE {
-            return Err("Image too large (max 16KB)".into());
-        }
-    }
     let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
@@ -601,7 +594,6 @@ async fn add_group_message(
             to: Some(input.group_id.clone()),
             text: input.content.clone(),
             ts_ms: now_ms(),
-            image_b64: input.image_b64.clone(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
     };
@@ -616,6 +608,10 @@ async fn add_group_message(
     // fan-out: obfuscate uniquely per member
     for member in group.members.iter().filter(|m| *m != &my_pub) {
         let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
+        if obf.len() > 8192 {
+            warn!("Group message too large to send over UDP ({} bytes) to {}", obf.len(), member);
+            continue;
+        }
         if let Err(e) = state.node.send_direct_block(member, obf).await {
             warn!("group send error -> {}: {e}", member);
         }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   apiGetIdentity,
   apiSetAlias,
@@ -34,8 +34,11 @@ export default function App() {
   const [showSlideshow, setShowSlideshow] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [imageB64, setImageB64] = useState<string | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  // Remove all image-related state
+  // Remove imageB64, imagePreview, handleFileChange, and image preview UI
+  // Only allow sending text messages
+  // In the send function, remove all references to imageB64 and only send text
+  // In the input area, remove the file input and preview
 
   const loadIdentity = useCallback(async () => {
     const id = await apiGetIdentity();
@@ -136,65 +139,32 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const send = useCallback(async () => {
     const msg = text.trim();
-    if ((!msg && !imageB64) || !target) {
-      console.warn('send(): no message, no image, or no target');
+    if (!msg || !target) {
+      console.warn('send(): no message or no target');
       return;
     }
     if (!identity) {
       console.warn('Send aborted: identity not yet loaded.');
       return;
     }
-    console.log('Send function: imageB64 length =', imageB64 ? imageB64.length : 0);
+    console.log('Send function: text length =', msg.length);
     // Debug log for outgoing payload
-    console.log('Sending payload:', { msg, imageB64 });
+    console.log('Sending payload:', { msg });
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
-      ok = await apiAddPeerMessage(msg, target.id, imageB64 ?? null);
+      ok = await apiAddPeerMessage(msg, target.id);
     } else if (target.kind === 'group') {
-      ok = await apiAddGroupMessage(msg, target.id, imageB64 ?? null);
+      ok = await apiAddGroupMessage(msg, target.id);
     }
     setSending(false);
     if (ok) {
       setText('');
-      setImageB64(null);
-      setImagePreview(null);
       refreshMessages();
     } else {
       console.warn('Send failed (see backend log).');
     }
-  }, [text, target, identity, refreshMessages, imageB64]);
-
-  // Handle file input change
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 16 * 1024) {
-      alert('Image too large (max 16KB)');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      let base64: string;
-      if (result.startsWith('data:')) {
-        const parts = result.split(',');
-        base64 = parts.length > 1 ? parts[1] : parts[0];
-      } else {
-        base64 = result;
-      }
-      if (!base64 || base64.length < 10) {
-        alert('Failed to read image data.');
-        setImageB64(null);
-        setImagePreview(null);
-        return;
-      }
-      console.log('File input handler: imageB64 length =', base64.length);
-      setImageB64(base64);
-      setImagePreview(result);
-    };
-    reader.readAsDataURL(file);
-  };
+  }, [text, target, identity, refreshMessages]);
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -361,17 +331,6 @@ export default function App() {
             groups={groups}
           />
           <div className="input-container flex flex-col gap-2">
-            {imagePreview && (
-              <div className="mb-2 flex items-center gap-2">
-                <img src={imagePreview} alt="preview" className="max-h-24 rounded border" />
-                <button
-                  className="text-xs text-red-500 underline"
-                  onClick={() => { setImageB64(null); setImagePreview(null); }}
-                >
-                  Remove
-                </button>
-              </div>
-            )}
             <div className="flex gap-2">
               <motion.input
                 type="text"
@@ -390,24 +349,12 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4 }}
               />
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                disabled={sending || !target || !identity}
-                className="file-input"
-                style={{ display: 'none' }}
-                id="image-upload-input"
-              />
-              <label htmlFor="image-upload-input" className="cursor-pointer px-2 py-2 bg-[var(--primary-dark)] text-white rounded-lg hover:bg-[var(--primary)] text-sm flex items-center">
-                📷
-              </label>
               <motion.button
                 className="rounded-lg bg-[var(--primary-dark)] px-4 py-3 text-sm font-semibold text-white hover:bg-[var(--primary)] disabled:opacity-50"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={send}
-                disabled={sending || (!text.trim() && !imageB64) || !target || !identity}
+                disabled={sending || !text.trim() || !target || !identity}
               >
                 Send
               </motion.button>
