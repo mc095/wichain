@@ -272,6 +272,12 @@ async fn record_decrypted_chat(
     chat_signed: &ChatSigned,
     network_from_b64: &str,
 ) {
+    // Debug log for image_b64
+    if let Some(ref img) = chat_signed.body.image_b64 {
+        log::debug!("record_decrypted_chat: image_b64 length = {}", img.len());
+    } else {
+        log::debug!("record_decrypted_chat: no image_b64");
+    }
     // best-effort signature check (log only)
     if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&chat_signed.body.from) {
         if sender_pub_bytes.len() == 32 {
