@@ -39,9 +39,6 @@ const WICHAIN_PORT: u16 = 60000;
 const BLOCKCHAIN_FILE: &str = "blockchain.json";
 const IDENTITY_FILE: &str = "identity.json";
 
-// Set ideal image size limit (100KB)
-const MAX_IMAGE_SIZE: usize = 16 * 1024; // 16KB
-
 /// ---- stored identity -------------------------------------------------------
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredIdentity {
