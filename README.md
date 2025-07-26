@@ -12,7 +12,7 @@ WiChain is a unique peer-to-peer chat application designed for local area networ
   * **Signed, Verifiable Messages**: All messages are signed using Ed25519, allowing recipients to verify the sender's authenticity.
   * **Blockchain-backed Chat History**: Each node maintains a local, append-only blockchain, providing a tamper-evident record of all chat activity.
   * **Ephemeral Group Chats**: Create temporary group chats with deterministic group IDs based on sorted member public keys.
-  * **Simple Message Obfuscation**: Messages are lightly obfuscated using SHA3-512 XOR for basic confidentiality on the LAN (note: this is not strong encryption).
+  * **Simple Message Obfuscation**: Messages are lightly obfuscated using SHA3-512 XOR for basic confidentiality on the LAN.
   * **Trust Scoring**: Each peer locally tracks trust scores for other participants, increasing with valid data and decaying over time.
 
 ## Overview
@@ -61,8 +61,6 @@ The project is structured into several Rust crates for clear separation of conce
   * **Confidentiality**: Basic message obfuscation (SHA3-512 XOR) for LAN privacy.
   * **Integrity**: Local blockchain ensures chat history cannot be tampered with undetectably.
 
-**Note**: WiChain's obfuscation is not strong encryption. For robust privacy, consider integrating a more secure encryption scheme. There is no global consensus; each node maintains its own local blockchain.
-
 ## 🚀 Quickstart
 
 1.  **Build Rust workspace**: Navigate to the `wichain/` directory and run `cargo build`.
@@ -70,6 +68,6 @@ The project is structured into several Rust crates for clear separation of conce
 3.  **Run Tauri App**: From the `wichain-backend/` directory, run `cargo tauri dev`.
 4.  Open the application on two or more devices connected to the same LAN and start chatting\!
 
-## ❤️ Credits & License
+## ❤️ Credits 
 
 WiChain is an open-source project designed for learning and experimentation, built with Rust, React, and Tauri. It's student-friendly and perfect for exploring decentralized chat and blockchain principles.
