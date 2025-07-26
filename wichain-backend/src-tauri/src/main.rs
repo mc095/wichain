@@ -21,7 +21,7 @@ use std::{
 
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
-use log::{debug, info, warn};
+use log::{info, warn};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_512};
@@ -294,7 +294,6 @@ async fn record_decrypted_chat(
         }
     }
     let _ = app.emit("chat_update", ());
-    debug!("record_decrypted_chat: appended to blockchain ({} bytes).", json.len());
 }
 
 // -----------------------------------------------------------------------------
@@ -313,16 +312,9 @@ async fn handle_incoming_network_payload(
     groups: &Arc<GroupManager>,
 ) {
     let cleaned = clean_transport_payload(payload_str);
-    debug!(
-        "inbound payload: raw_len={} cleaned_len={} from={}..",
-        payload_str.len(),
-        cleaned.len(),
-        &network_from_b64[..network_from_b64.len().min(8)]
-    );
 
     // ---- 0. Try direct SHA3-XOR deobfuscation w/ reported 'from' ----
     if let Some(clear) = simple_deobfuscate_json(my_pub_b64, network_from_b64, cleaned) {
-        debug!("inbound: deobf w/reported sender OK ({} bytes).", clear.len());
         // Try parsing as ChatSigned
         if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
             record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
@@ -330,7 +322,6 @@ async fn handle_incoming_network_payload(
         }
         // Try parsing as GroupCreateSigned
         if let Ok(group_create) = serde_json::from_str::<GroupCreateSigned>(&clear) {
-            debug!("inbound: parsed as GroupCreateSigned from {}..", &network_from_b64[..8]);
             // Verify signature
             if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(network_from_b64) {
                 if sender_pub_bytes.len() == 32 {
@@ -340,7 +331,6 @@ async fn handle_incoming_network_payload(
                         if group_create.verify(&vk) {
                             // Create group locally if signature is valid
                             groups.create_group(group_create.body.members);
-                            debug!("Group created locally: id={}", group_create.body.group_id);
                             let _ = app.emit("group_update", ()); // Notify frontend
                         } else {
                             warn!("Group create signature INVALID from {}..", &network_from_b64[..8]);
@@ -350,9 +340,8 @@ async fn handle_incoming_network_payload(
             }
             return; // SUCCESS - exit early
         }
-        debug!("inbound: deobf OK but JSON parse failed; trying fallbacks.");
     } else {
-        debug!("inbound: deobf w/reported sender FAILED; will brute peers.");
+        warn!("inbound: deobf w/reported sender FAILED; will brute peers.");
     }
 
     // ---- 1. Brute deobf w/ *all* known peers (sender mismatch) ----
@@ -364,19 +353,11 @@ async fn handle_incoming_network_payload(
         if let Some(clear) = simple_deobfuscate_json(my_pub_b64, &p.id, cleaned) {
             // Try parsing as ChatSigned
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
-                debug!(
-                    "inbound: deobf succeeded w/ alt peer id={}..",
-                    &p.id[..p.id.len().min(8)]
-                );
                 record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
                 return; // SUCCESS - exit early
             }
             // Try parsing as GroupCreateSigned
             if let Ok(group_create) = serde_json::from_str::<GroupCreateSigned>(&clear) {
-                debug!(
-                    "inbound: parsed as GroupCreateSigned with alt peer id={}..",
-                    &p.id[..8]
-                );
                 if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&p.id) {
                     if sender_pub_bytes.len() == 32 {
                         if let Ok(vk) = VerifyingKey::from_bytes(
@@ -384,7 +365,6 @@ async fn handle_incoming_network_payload(
                         ) {
                             if group_create.verify(&vk) {
                                 groups.create_group(group_create.body.members);
-                                debug!("Group created locally: id={}", group_create.body.group_id);
                                 let _ = app.emit("group_update", ()); // Notify frontend
                             } else {
                                 warn!("Group create signature INVALID from {}..", &p.id[..8]);
@@ -399,14 +379,12 @@ async fn handle_incoming_network_payload(
 
     // ---- 2. Maybe payload was never obfuscated (direct ChatSigned JSON) ----
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(cleaned) {
-        debug!("inbound: payload parsed directly as ChatSigned JSON.");
         record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return; // SUCCESS - exit early
     }
 
     // ---- 3. Or a bare ChatBody JSON ----
     if let Ok(body) = serde_json::from_str::<ChatBody>(cleaned) {
-        debug!("inbound: payload parsed directly as ChatBody JSON (unsigned).");
         let chat_signed = ChatSigned { body, sig_b64: String::new() };
         record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return; // SUCCESS - exit early

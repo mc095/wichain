@@ -64,7 +64,6 @@ export default function App() {
 
   useEffect(() => {
     const un = listen('alias_update', () => {
-      console.log('alias_update event');
       loadIdentity();
       refreshGroups();
     });
@@ -89,7 +88,6 @@ export default function App() {
   useEffect(() => {
     refreshPeers();
     const unlistenPromise = listen('peer_update', () => {
-      console.log('peer_update event');
       refreshPeers();
     });
     const interval = setInterval(refreshPeers, 5_000);
@@ -103,7 +101,6 @@ export default function App() {
   useEffect(() => {
     refreshGroups();
     const unlistenPromise = listen('group_update', () => {
-      console.log('group_update event');
       refreshGroups();
     });
     return () => {
@@ -119,7 +116,6 @@ export default function App() {
   useEffect(() => {
     refreshMessages();
     const unlistenPromise = listen('chat_update', () => {
-      console.log('chat_update event');
       refreshMessages();
     });
     const interval = setInterval(refreshMessages, 10_000);
@@ -135,14 +131,11 @@ export default function App() {
   const send = useCallback(async () => {
     const msg = text.trim();
     if (!msg || !target) {
-      console.warn('send(): no message or no target');
       return;
     }
     if (!identity) {
-      console.warn('Send aborted: identity not yet loaded.');
       return;
     }
-    console.log('send(): sending', { msg, target });
     setSending(true);
     let ok = false;
     if (target.kind === 'peer') {
@@ -289,11 +282,9 @@ export default function App() {
               myPub={myPub}
               selected={target}
               onSelectPeer={(id) => {
-                console.log('Peer selected:', id);
                 setTarget({ kind: 'peer', id });
               }}
               onSelectGroup={(id) => {
-                console.log('Group selected:', id);
                 setTarget({ kind: 'group', id });
               }}
             />
