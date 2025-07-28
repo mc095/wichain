@@ -30,6 +30,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
+use crate::crypto_utils::{encrypt_text, decrypt_text};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
@@ -148,6 +151,7 @@ pub struct AppState {
     pub groups: Arc<GroupManager>,
     pub blockchain_path: PathBuf,
     pub identity_path: PathBuf,
+    pub aes_key: Arc<[u8; 32]>,
 }
 
 // -----------------------------------------------------------------------------
@@ -460,10 +464,11 @@ async fn add_chat_message(
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
 
+    let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
-        text: content.clone(),
+        text: encrypted_text,
         ts_ms: now_ms(),
     };
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
@@ -543,10 +548,11 @@ async fn add_group_message(
     let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
+        let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
         let body = ChatBody {
             from: id.public_key_b64.clone(),
             to: Some(group_id.clone()),
-            text: content.clone(),
+            text: encrypted_text,
             ts_ms: now_ms(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
@@ -593,6 +599,9 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                     .map(|gid| state.groups.is_member(gid, &my_pub))
                     .unwrap_or(false)
             {
+                let decrypted_text = decrypt_text(&signed.body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
+                let mut signed = signed;
+                signed.body.text = decrypted_text;
                 out.push(signed.body);
             }
             continue;
@@ -606,6 +615,9 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                     .map(|gid| state.groups.is_member(gid, &my_pub))
                     .unwrap_or(false)
             {
+                let decrypted_text = decrypt_text(&body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
+                let mut body = body;
+                body.text = decrypted_text;
                 out.push(body);
             }
         }
@@ -772,6 +784,7 @@ fn main() {
                 groups,
                 blockchain_path,
                 identity_path,
+                aes_key: Arc::new(load_or_create_aes_key(&data_dir.join("aes_key.bin")).expect("AES key")),
             });
 
             Ok(())
