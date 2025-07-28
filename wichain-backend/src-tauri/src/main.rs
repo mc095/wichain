@@ -30,7 +30,8 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
-use crate::crypto_utils::{encrypt_text, decrypt_text};
+mod crypto_utils;
+use crypto_utils::{encrypt_text, decrypt_text};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 
@@ -643,6 +644,21 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     warn!("Local WiChain chat history cleared; identity preserved.");
     let _ = state.app.emit("reset_done", ());
     Ok(())
+}
+
+fn load_or_create_aes_key(path: &std::path::Path) -> Result<[u8; 32], String> {
+    if path.exists() {
+        let mut file = File::open(path).map_err(|e| format!("open key: {e}"))?;
+        let mut buf = [0u8; 32];
+        file.read_exact(&mut buf).map_err(|e| format!("read key: {e}"))?;
+        Ok(buf)
+    } else {
+        let mut buf = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut buf);
+        let mut file = File::create(path).map_err(|e| format!("create key: {e}"))?;
+        file.write_all(&buf).map_err(|e| format!("write key: {e}"))?;
+        Ok(buf)
+    }
 }
 
 // -----------------------------------------------------------------------------
