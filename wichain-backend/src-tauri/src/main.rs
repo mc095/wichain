@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ### Security notes
@@ -32,8 +33,10 @@ use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
 mod crypto_utils;
 use crypto_utils::{encrypt_text, decrypt_text};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::File;
+use std::io::Read;
+use rand::RngCore;
+use std::io::Write;
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
