@@ -1,4 +1,4 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 //! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ### Security notes
@@ -23,7 +23,8 @@ use std::{
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use log::{info, warn};
-use rand::rngs::OsRng;
+use rand::rngs::{OsRng};
+// use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_512};
 use tokio::sync::Mutex;
@@ -37,6 +38,10 @@ use std::fs::File;
 use std::io::Read;
 use rand::RngCore;
 use std::io::Write;
+// Fixed import - try these options depending on your x25519_dalek version
+use x25519_dalek::{PublicKey as X25519Public, EphemeralSecret as X25519Secret};
+// Alternative if the above doesn't work:
+// use x25519_dalek::{PublicKey as X25519Public, StaticSecret as X25519Secret};
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
@@ -52,6 +57,8 @@ pub struct StoredIdentity {
     pub alias: String,
     pub private_key_b64: String,
     pub public_key_b64: String,
+    pub x25519_private_b64: String,
+    pub x25519_public_b64: String,
 }
 
 /// Canonical body we sign & display.
@@ -213,12 +220,24 @@ fn load_or_create_identity(path: &Path) -> StoredIdentity {
 
 fn regenerate_identity(path: &Path) -> StoredIdentity {
     let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
     let alias = format!("Anon-{}", rand::random::<u16>());
-    let public_key_b64 =
-        general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
+    let public_key_b64 = general_purpose::STANDARD.encode(verifying_key.to_bytes());
     let private_key_b64 = general_purpose::STANDARD.encode(signing_key.to_bytes());
 
-    let id = StoredIdentity { alias, public_key_b64, private_key_b64 };
+    // Generate X25519 keypair
+    let x25519_secret = X25519Secret::random_from_rng(&mut OsRng);
+    let x25519_public = X25519Public::from(&x25519_secret);
+    let x25519_public_b64 = general_purpose::STANDARD.encode(x25519_public.as_bytes());
+
+    let id = StoredIdentity {
+        alias,
+        public_key_b64,
+        private_key_b64,
+        x25519_private_b64: String::new(), // Avoid serializing the secret key
+        x25519_public_b64,
+    };
+
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
         warn!("Failed to write identity.json: {e}");
     }
@@ -236,6 +255,21 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     arr.copy_from_slice(&priv_bytes);
     Ok(SigningKey::from_bytes(&arr))
 }
+
+fn b64_to_32(bytes_b64: &str) -> [u8; 32] {
+    let vec = general_purpose::STANDARD.decode(bytes_b64).expect("b64 decode");
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&vec);
+    arr
+}
+
+// // FIXED: Helper function to create X25519Secret from bytes
+// fn x25519_secret_from_bytes(bytes: [u8; 32]) -> X25519Secret {
+//     let mut rng = rand::rngs::StdRng::from_seed(bytes);
+//     X25519Secret::random_from_rng(&mut rng)
+// }
+
+
 
 // -----------------------------------------------------------------------------
 // inbound payload cleaning
@@ -468,32 +502,39 @@ async fn add_chat_message(
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
 
-    let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
+    // Generate a new ephemeral secret for each message
+    let my_x25519_secret = X25519Secret::random_from_rng(&mut OsRng);
+    let recipient_x25519_public = X25519Public::from(b64_to_32(&peer_id));
+    let shared_secret = my_x25519_secret.diffie_hellman(&recipient_x25519_public);
+    let aes_key = shared_secret.as_bytes();
+
+    let encrypted_text = encrypt_text(&content, aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
         text: encrypted_text,
         ts_ms: now_ms(),
     };
+
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
 
-    // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
         chain.add_text_block(clear_json.clone());
         chain.save_to_file(&state.blockchain_path).ok();
     }
-    let _ = state.app.emit("chat_update", ());
 
-    // obfuscate + send
+    let _ = state.app.emit("chat_update", ());
     let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
+
     if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
         warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
     }
 
     Ok(())
 }
+
 
 #[tauri::command]
 async fn create_group(
@@ -592,18 +633,21 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
     };
     let chain = state.blockchain.lock().await;
     let mut out = Vec::new();
+
     for b in &chain.chain {
         if let Ok(signed) = serde_json::from_str::<ChatSigned>(&b.data) {
             if signed.body.from == my_pub
                 || signed.body.to.as_deref() == Some(&my_pub)
-                || signed
-                    .body
-                    .to
-                    .as_ref()
-                    .map(|gid| state.groups.is_member(gid, &my_pub))
-                    .unwrap_or(false)
+                || signed.body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
             {
-                let decrypted_text = decrypt_text(&signed.body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
+                let sender_x25519_public = X25519Public::from(b64_to_32(&signed.body.from));
+
+                // Generate a new ephemeral secret for decryption
+                let my_x25519_secret = X25519Secret::random_from_rng(&mut OsRng);
+                let shared_secret = my_x25519_secret.diffie_hellman(&sender_x25519_public);
+                let aes_key = shared_secret.as_bytes();
+
+                let decrypted_text = decrypt_text(&signed.body.text, aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
                 let mut signed = signed;
                 signed.body.text = decrypted_text;
                 out.push(signed.body);
@@ -613,11 +657,7 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
         if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
             if body.from == my_pub
                 || body.to.as_deref() == Some(&my_pub)
-                || body
-                    .to
-                    .as_ref()
-                    .map(|gid| state.groups.is_member(gid, &my_pub))
-                    .unwrap_or(false)
+                || body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
             {
                 let decrypted_text = decrypt_text(&body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
                 let mut body = body;
