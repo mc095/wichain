@@ -31,12 +31,10 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
-mod crypto_utils;
-use crypto_utils::{encrypt_text, decrypt_text};
-use std::fs::File;
-use std::io::Read;
-use rand::RngCore;
-use std::io::Write;
+// use std::fs::File;
+// use std::io::Read;
+// use rand::RngCore;
+// use std::io::Write;
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
@@ -155,7 +153,6 @@ pub struct AppState {
     pub groups: Arc<GroupManager>,
     pub blockchain_path: PathBuf,
     pub identity_path: PathBuf,
-    pub aes_key: Arc<[u8; 32]>,
 }
 
 // -----------------------------------------------------------------------------
@@ -478,8 +475,8 @@ async fn add_chat_message(
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
 
-    // Use simple AES encryption
-    let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
+    // Use XOR obfuscation for consistency with network transport
+    let encrypted_text = simple_obfuscate_json(&my_pub, peer_id, &content);
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
@@ -565,7 +562,8 @@ async fn add_group_message(
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
         
-        let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
+        // For group messages, use simple XOR obfuscation
+        let encrypted_text = simple_obfuscate_json(&id.public_key_b64, &group_id, &content);
         let body = ChatBody {
             from: id.public_key_b64.clone(),
             to: Some(group_id.clone()),
@@ -612,10 +610,12 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                 || signed.body.to.as_deref() == Some(&my_pub)
                 || signed.body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
             {
-                let decrypted_text = decrypt_text(&signed.body.text, &*state.aes_key).unwrap_or_else(|_| {
-                    warn!("Failed to decrypt message from {}", signed.body.from);
-                    "[DECRYPT_ERROR]".to_string()
-                });
+                // Try to deobfuscate the text using XOR
+                let decrypted_text = simple_deobfuscate_json(&my_pub, &signed.body.from, &signed.body.text)
+                    .unwrap_or_else(|| {
+                        warn!("Failed to deobfuscate message from {}", signed.body.from);
+                        "[DECRYPT_ERROR]".to_string()
+                    });
                 let mut signed = signed;
                 signed.body.text = decrypted_text;
                 out.push(signed.body);
@@ -627,7 +627,12 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                 || body.to.as_deref() == Some(&my_pub)
                 || body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
             {
-                let decrypted_text = decrypt_text(&body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
+                // Try to deobfuscate the text using XOR
+                let decrypted_text = simple_deobfuscate_json(&my_pub, &body.from, &body.text)
+                    .unwrap_or_else(|| {
+                        warn!("Failed to deobfuscate message from {}", body.from);
+                        "[DECRYPT_ERROR]".to_string()
+                    });
                 let mut body = body;
                 body.text = decrypted_text;
                 out.push(body);
@@ -657,20 +662,7 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-fn load_or_create_aes_key(path: &std::path::Path) -> Result<[u8; 32], String> {
-    if path.exists() {
-        let mut file = File::open(path).map_err(|e| format!("open key: {e}"))?;
-        let mut buf = [0u8; 32];
-        file.read_exact(&mut buf).map_err(|e| format!("read key: {e}"))?;
-        Ok(buf)
-    } else {
-        let mut buf = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut buf);
-        let mut file = File::create(path).map_err(|e| format!("create key: {e}"))?;
-        file.write_all(&buf).map_err(|e| format!("write key: {e}"))?;
-        Ok(buf)
-    }
-}
+
 
 // -----------------------------------------------------------------------------
 // main (builder)   -- placed last so all helpers above are in scope
@@ -811,7 +803,6 @@ fn main() {
                 groups,
                 blockchain_path,
                 identity_path,
-                aes_key: Arc::new(load_or_create_aes_key(&data_dir.join("aes_key.bin")).expect("AES key")),
             });
 
             Ok(())

@@ -20,7 +20,6 @@ export interface PeerInfo {
   alias: string;
   pubkey: string;  // duplicate: same as id in our build (kept for compat)
   last_seen_ms?: number;
-  x25519_public_b64: string;
 }
 
 /**
@@ -28,11 +27,10 @@ export interface PeerInfo {
  * - `to` is peer pubkey (for 1:1) OR group_id (for groups).
  */
 export interface ChatBody {
-  from: string; // sender's X25519 public key (b64)
+  from: string; // sender's public key (b64)
   to?: string | null;
   text: string;
   ts_ms: number;
-  x25519_public_b64: string; // sender's X25519 public key (b64)
 }
 
 /**
