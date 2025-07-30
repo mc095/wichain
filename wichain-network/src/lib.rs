@@ -91,19 +91,41 @@ impl NetworkNode {
 
     /// Start receiver + periodic broadcaster.
     pub async fn start(&self, tx: mpsc::Sender<NetworkMessage>) {
-        let bind_addr = format!("0.0.0.0:{}", self.port);
-        let socket = match UdpSocket::bind(&bind_addr).await {
-            Ok(s) => {
-                let _ = s.set_broadcast(true);
-                info!("✅ Listening on {}", bind_addr);
-                s
+        // Try multiple binding addresses for cross-platform compatibility
+        let bind_addresses = vec![
+            format!("0.0.0.0:{}", self.port),
+            format!("127.0.0.1:{}", self.port),
+        ];
+        
+        let mut socket = None;
+        for bind_addr in &bind_addresses {
+            match UdpSocket::bind(bind_addr).await {
+                Ok(s) => {
+                    let _ = s.set_broadcast(true);
+                    // Set socket options for better cross-platform compatibility
+                    if let Err(e) = s.set_send_buffer_size(65536) {
+                        warn!("Failed to set send buffer size: {}", e);
+                    }
+                    if let Err(e) = s.set_recv_buffer_size(65536) {
+                        warn!("Failed to set recv buffer size: {}", e);
+                    }
+                    info!("✅ Listening on {}", bind_addr);
+                    socket = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    warn!("Failed to bind on {}: {}", bind_addr, e);
+                }
             }
-            Err(e) => {
-                error!("❌ Failed to bind UDP socket: {e:?}");
+        }
+        
+        let socket = match socket {
+            Some(s) => s,
+            None => {
+                error!("❌ Failed to bind UDP socket on any address");
                 return;
             }
         };
-        let socket = Arc::new(socket);
 
         // Receive loop
         {

@@ -179,3 +179,13 @@ export async function apiResetData(): Promise<boolean> {
     return false;
   }
 }
+
+/** Test network connectivity (debug command). */
+export async function apiTestNetwork(): Promise<string> {
+  try {
+    return await invoke<string>('test_network_connectivity');
+  } catch (err) {
+    console.error('test_network_connectivity failed', err);
+    return 'Network test failed';
+  }
+}

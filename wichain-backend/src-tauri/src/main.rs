@@ -684,6 +684,24 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Diagnostic command to test network connectivity
+#[tauri::command]
+async fn test_network_connectivity(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let peers = state.node.list_peers().await;
+    
+    let mut result = format!("Network Diagnostic:\n");
+    result.push_str(&format!("My ID: {}\n", &my_pub[..my_pub.len().min(20)]));
+    result.push_str(&format!("Port: {}\n", WICHAIN_PORT));
+    result.push_str(&format!("Peers found: {}\n", peers.len()));
+    
+    for peer in &peers {
+        result.push_str(&format!("- {} ({})\n", peer.alias, &peer.id[..peer.id.len().min(10)]));
+    }
+    
+    Ok(result)
+}
+
 // -----------------------------------------------------------------------------
 // main (builder)   -- placed last so all helpers above are in scope
 // -----------------------------------------------------------------------------
@@ -836,7 +854,8 @@ fn main() {
             list_groups,
             add_group_message,
             get_chat_history,
-            reset_data
+            reset_data,
+            test_network_connectivity
         ])
         .run(tauri::generate_context!())
         .expect("Error running WiChain");
