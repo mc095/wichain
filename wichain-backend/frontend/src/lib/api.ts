@@ -27,7 +27,7 @@ export interface PeerInfo {
  * - `to` is peer pubkey (for 1:1) OR group_id (for groups).
  */
 export interface ChatBody {
-  from: string; // sender's public key (b64)
+  from: string;
   to?: string | null;
   text: string;
   ts_ms: number;
