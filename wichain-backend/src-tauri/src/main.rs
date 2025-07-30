@@ -1,11 +1,10 @@
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-//! WiChain Tauri backend – **direct LAN, AES encrypted peer & group chat**.
+//! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
 //!
 //! ### Security notes
-//! * **AES-GCM encryption**: Messages encrypted with AES-256-GCM.
+//! * **Obfuscation only**: SHA3‑512 mask + XOR + Base64. *Not* real encryption.
 //! * **Authenticity**: Chat bodies signed with Ed25519.
-//! * **Transport**: Signed JSON encrypted before UDP send.
-//! * **Ledger**: Encrypted signed JSON appended locally (tamper‑evident blockchain file).
+//! * **Transport**: Signed JSON obfuscated before UDP send.
+//! * **Ledger**: Clear signed JSON appended locally (tamper‑evident blockchain file).
 //!
 //! ### Commands
 //! `get_identity`, `set_alias`, `get_peers`, `add_chat_message`,
@@ -31,10 +30,6 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use wichain_blockchain::Blockchain;
 use wichain_network::{NetworkMessage, NetworkNode, PeerInfo};
-// use std::fs::File;
-// use std::io::Read;
-// use rand::RngCore;
-// use std::io::Write;
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
@@ -210,17 +205,12 @@ fn load_or_create_identity(path: &Path) -> StoredIdentity {
 
 fn regenerate_identity(path: &Path) -> StoredIdentity {
     let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
     let alias = format!("Anon-{}", rand::random::<u16>());
-    let public_key_b64 = general_purpose::STANDARD.encode(verifying_key.to_bytes());
+    let public_key_b64 =
+        general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
     let private_key_b64 = general_purpose::STANDARD.encode(signing_key.to_bytes());
 
-    let id = StoredIdentity {
-        alias,
-        public_key_b64,
-        private_key_b64,
-    };
-
+    let id = StoredIdentity { alias, public_key_b64, private_key_b64 };
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
         warn!("Failed to write identity.json: {e}");
     }
@@ -238,10 +228,6 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     arr.copy_from_slice(&priv_bytes);
     Ok(SigningKey::from_bytes(&arr))
 }
-
-
-
-
 
 // -----------------------------------------------------------------------------
 // inbound payload cleaning
@@ -471,38 +457,34 @@ async fn add_chat_message(
         return Err("peer required".into());
     }
 
-    info!("Sending message to peer: {}", peer_id);
     let my_pub = state.identity.lock().await.public_key_b64.clone();
     let my_sk = state.signing_key.lock().await.clone();
 
-    // Use XOR obfuscation for consistency with network transport
-    let encrypted_text = simple_obfuscate_json(&my_pub, peer_id, &content);
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
-        text: encrypted_text,
+        text: content.clone(),
         ts_ms: now_ms(),
     };
-
     let chat_signed = ChatSigned::new_signed(body, &my_sk);
     let clear_json = serde_json::to_string(&chat_signed).unwrap();
 
+    // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
         chain.add_text_block(clear_json.clone());
         chain.save_to_file(&state.blockchain_path).ok();
     }
-
     let _ = state.app.emit("chat_update", ());
-    let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
 
+    // obfuscate + send
+    let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
     if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
         warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
     }
 
     Ok(())
 }
-
 
 #[tauri::command]
 async fn create_group(
@@ -561,13 +543,10 @@ async fn add_group_message(
     let (my_pub, chat_signed) = {
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
-        
-        // For group messages, use simple XOR obfuscation
-        let encrypted_text = simple_obfuscate_json(&id.public_key_b64, &group_id, &content);
         let body = ChatBody {
             from: id.public_key_b64.clone(),
             to: Some(group_id.clone()),
-            text: encrypted_text,
+            text: content.clone(),
             ts_ms: now_ms(),
         };
         (id.public_key_b64.clone(), ChatSigned::new_signed(body, &*sk))
@@ -603,21 +582,17 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
     };
     let chain = state.blockchain.lock().await;
     let mut out = Vec::new();
-
     for b in &chain.chain {
         if let Ok(signed) = serde_json::from_str::<ChatSigned>(&b.data) {
             if signed.body.from == my_pub
                 || signed.body.to.as_deref() == Some(&my_pub)
-                || signed.body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
+                || signed
+                    .body
+                    .to
+                    .as_ref()
+                    .map(|gid| state.groups.is_member(gid, &my_pub))
+                    .unwrap_or(false)
             {
-                // Try to deobfuscate the text using XOR
-                let decrypted_text = simple_deobfuscate_json(&my_pub, &signed.body.from, &signed.body.text)
-                    .unwrap_or_else(|| {
-                        warn!("Failed to deobfuscate message from {}", signed.body.from);
-                        "[DECRYPT_ERROR]".to_string()
-                    });
-                let mut signed = signed;
-                signed.body.text = decrypted_text;
                 out.push(signed.body);
             }
             continue;
@@ -625,16 +600,12 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
         if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
             if body.from == my_pub
                 || body.to.as_deref() == Some(&my_pub)
-                || body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
+                || body
+                    .to
+                    .as_ref()
+                    .map(|gid| state.groups.is_member(gid, &my_pub))
+                    .unwrap_or(false)
             {
-                // Try to deobfuscate the text using XOR
-                let decrypted_text = simple_deobfuscate_json(&my_pub, &body.from, &body.text)
-                    .unwrap_or_else(|| {
-                        warn!("Failed to deobfuscate message from {}", body.from);
-                        "[DECRYPT_ERROR]".to_string()
-                    });
-                let mut body = body;
-                body.text = decrypted_text;
                 out.push(body);
             }
         }
@@ -661,8 +632,6 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let _ = state.app.emit("reset_done", ());
     Ok(())
 }
-
-
 
 // -----------------------------------------------------------------------------
 // main (builder)   -- placed last so all helpers above are in scope
