@@ -1,11 +1,11 @@
-// #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-//! WiChain Tauri backend – **direct LAN, SHA3‑XOR confidential peer & group chat** (no broadcast).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+//! WiChain Tauri backend – **direct LAN, AES encrypted peer & group chat**.
 //!
 //! ### Security notes
-//! * **Obfuscation only**: SHA3‑512 mask + XOR + Base64. *Not* real encryption.
+//! * **AES-GCM encryption**: Messages encrypted with AES-256-GCM.
 //! * **Authenticity**: Chat bodies signed with Ed25519.
-//! * **Transport**: Signed JSON obfuscated before UDP send.
-//! * **Ledger**: Clear signed JSON appended locally (tamper‑evident blockchain file).
+//! * **Transport**: Signed JSON encrypted before UDP send.
+//! * **Ledger**: Encrypted signed JSON appended locally (tamper‑evident blockchain file).
 //!
 //! ### Commands
 //! `get_identity`, `set_alias`, `get_peers`, `add_chat_message`,
@@ -23,8 +23,7 @@ use std::{
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use log::{info, warn};
-use rand::rngs::{OsRng};
-use rand::SeedableRng;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Sha3_512};
 use tokio::sync::Mutex;
@@ -38,8 +37,6 @@ use std::fs::File;
 use std::io::Read;
 use rand::RngCore;
 use std::io::Write;
-// Fixed import for x25519-dalek 2.0.1
-use x25519_dalek::{PublicKey as X25519Public, EphemeralSecret as X25519Secret};
 
 mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
@@ -55,8 +52,6 @@ pub struct StoredIdentity {
     pub alias: String,
     pub private_key_b64: String,
     pub public_key_b64: String,
-    pub x25519_private_b64: String,
-    pub x25519_public_b64: String,
 }
 
 /// Canonical body we sign & display.
@@ -223,22 +218,10 @@ fn regenerate_identity(path: &Path) -> StoredIdentity {
     let public_key_b64 = general_purpose::STANDARD.encode(verifying_key.to_bytes());
     let private_key_b64 = general_purpose::STANDARD.encode(signing_key.to_bytes());
 
-    // Generate X25519 keypair
-    let x25519_secret = X25519Secret::random_from_rng(&mut OsRng);
-    let x25519_public = X25519Public::from(&x25519_secret);
-    let x25519_public_b64 = general_purpose::STANDARD.encode(x25519_public.as_bytes());
-    // For x25519-dalek 2.0.1, we can't easily serialize EphemeralSecret
-    // We'll use a different approach - generate a random seed and store it
-    let mut seed = [0u8; 32];
-    OsRng.fill_bytes(&mut seed);
-    let x25519_private_b64 = general_purpose::STANDARD.encode(seed);
-
     let id = StoredIdentity {
         alias,
         public_key_b64,
         private_key_b64,
-        x25519_private_b64,
-        x25519_public_b64,
     };
 
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
@@ -259,21 +242,7 @@ fn decode_signing_key(id: &StoredIdentity) -> Result<SigningKey, String> {
     Ok(SigningKey::from_bytes(&arr))
 }
 
-fn b64_to_32(bytes_b64: &str) -> [u8; 32] {
-    let vec = general_purpose::STANDARD.decode(bytes_b64).expect("b64 decode");
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&vec);
-    arr
-}
 
-// Helper function to create X25519Secret from stored bytes
-fn x25519_secret_from_b64(b64: &str) -> X25519Secret {
-    let bytes = b64_to_32(b64);
-    // For x25519-dalek 2.0.1, we'll use the bytes as a seed for a deterministic RNG
-    // This is a simplified approach - in production you'd want a more secure method
-    let mut rng = rand::rngs::StdRng::from_seed(bytes);
-    X25519Secret::random_from_rng(&mut rng)
-}
 
 
 
@@ -505,27 +474,12 @@ async fn add_chat_message(
         return Err("peer required".into());
     }
 
-    let (my_pub, my_sk, my_x25519_private_b64) = {
-        let id = state.identity.lock().await;
-        (id.public_key_b64.clone(), state.signing_key.lock().await.clone(), id.x25519_private_b64.clone())
-    };
+    info!("Sending message to peer: {}", peer_id);
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let my_sk = state.signing_key.lock().await.clone();
 
-    // Use stored X25519 private key for encryption
-    let aes_key = if !my_x25519_private_b64.is_empty() {
-        let recipient_x25519_public = X25519Public::from(b64_to_32(&peer_id));
-        let my_x25519_secret = x25519_secret_from_b64(&my_x25519_private_b64);
-        let shared_secret = my_x25519_secret.diffie_hellman(&recipient_x25519_public);
-        let shared_bytes = shared_secret.as_bytes();
-        // Convert to owned array to avoid lifetime issues
-        let mut aes_key = [0u8; 32];
-        aes_key.copy_from_slice(shared_bytes);
-        aes_key
-    } else {
-        // Fallback to old encryption method
-        *state.aes_key
-    };
-
-    let encrypted_text = encrypt_text(&content, &aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
+    // Use simple AES encryption
+    let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
     let body = ChatBody {
         from: my_pub.clone(),
         to: Some(peer_id.to_string()),
@@ -611,15 +565,7 @@ async fn add_group_message(
         let id = state.identity.lock().await;
         let sk = state.signing_key.lock().await;
         
-        // Use stored X25519 private key for encryption if available
-        let aes_key = if !id.x25519_private_b64.is_empty() {
-            // For group messages, we'll use the old method for now since we need to encrypt for multiple recipients
-            &*state.aes_key
-        } else {
-            &*state.aes_key
-        };
-        
-        let encrypted_text = encrypt_text(&content, aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
+        let encrypted_text = encrypt_text(&content, &*state.aes_key).unwrap_or_else(|_| "[ENCRYPT_ERROR]".to_string());
         let body = ChatBody {
             from: id.public_key_b64.clone(),
             to: Some(group_id.clone()),
@@ -666,32 +612,13 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                 || signed.body.to.as_deref() == Some(&my_pub)
                 || signed.body.to.as_ref().map(|gid| state.groups.is_member(gid, &my_pub)).unwrap_or(false)
             {
-                // Get the stored X25519 private key for decryption
-                let my_x25519_private_b64 = {
-                    let id = state.identity.lock().await;
-                    id.x25519_private_b64.clone()
-                };
-                
-                if !my_x25519_private_b64.is_empty() {
-                    let sender_x25519_public = X25519Public::from(b64_to_32(&signed.body.from));
-                    let my_x25519_secret = x25519_secret_from_b64(&my_x25519_private_b64);
-                    let shared_secret = my_x25519_secret.diffie_hellman(&sender_x25519_public);
-                    let shared_bytes = shared_secret.as_bytes();
-                    // Convert to owned array to avoid lifetime issues
-                    let mut aes_key = [0u8; 32];
-                    aes_key.copy_from_slice(shared_bytes);
-
-                    let decrypted_text = decrypt_text(&signed.body.text, &aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
-                    let mut signed = signed;
-                    signed.body.text = decrypted_text;
-                    out.push(signed.body);
-                } else {
-                    // Fallback to old encryption method
-                    let decrypted_text = decrypt_text(&signed.body.text, &*state.aes_key).unwrap_or_else(|_| "[DECRYPT_ERROR]".to_string());
-                    let mut signed = signed;
-                    signed.body.text = decrypted_text;
-                    out.push(signed.body);
-                }
+                let decrypted_text = decrypt_text(&signed.body.text, &*state.aes_key).unwrap_or_else(|_| {
+                    warn!("Failed to decrypt message from {}", signed.body.from);
+                    "[DECRYPT_ERROR]".to_string()
+                });
+                let mut signed = signed;
+                signed.body.text = decrypted_text;
+                out.push(signed.body);
             }
             continue;
         }
