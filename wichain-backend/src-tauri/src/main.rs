@@ -191,6 +191,33 @@ fn simple_deobfuscate_json(my_pub: &str, other_pub: &str, b64_payload: &str) -> 
 }
 
 // -----------------------------------------------------------------------------
+// Blockchain storage encryption helpers
+// -----------------------------------------------------------------------------
+
+/// Encrypt message for blockchain storage using a simple key derived from user's pubkey
+fn encrypt_for_storage(message: &str, user_pubkey: &str) -> String {
+    let mut hasher = Sha3_512::default();
+    hasher.update(user_pubkey.as_bytes());
+    hasher.update(b"blockchain_storage_key");
+    let key = hasher.finalize();
+    
+    let encrypted = simple_xor(message.as_bytes(), &key[..32]);
+    general_purpose::STANDARD.encode(encrypted)
+}
+
+/// Decrypt message from blockchain storage
+fn decrypt_from_storage(encrypted: &str, user_pubkey: &str) -> Option<String> {
+    let mut hasher = Sha3_512::default();
+    hasher.update(user_pubkey.as_bytes());
+    hasher.update(b"blockchain_storage_key");
+    let key = hasher.finalize();
+    
+    let encrypted_bytes = general_purpose::STANDARD.decode(encrypted.as_bytes()).ok()?;
+    let decrypted = simple_xor(&encrypted_bytes, &key[..32]);
+    String::from_utf8(decrypted).ok()
+}
+
+// -----------------------------------------------------------------------------
 // identity load / save
 // -----------------------------------------------------------------------------
 fn load_or_create_identity(path: &Path) -> StoredIdentity {
@@ -285,7 +312,11 @@ async fn record_decrypted_chat(
         }
     }
 
-    let json = serde_json::to_string(chat_signed).unwrap();
+    // Create encrypted version for blockchain storage
+    let mut encrypted_chat = chat_signed.clone();
+    encrypted_chat.body.text = encrypt_for_storage(&chat_signed.body.text, &chat_signed.body.from);
+    
+    let json = serde_json::to_string(&encrypted_chat).unwrap();
     {
         let mut chain = blockchain.lock().await;
         chain.add_text_block(json.clone());
@@ -472,7 +503,11 @@ async fn add_chat_message(
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(clear_json.clone());
+        // Encrypt the message for blockchain storage
+        let mut encrypted_chat = chat_signed.clone();
+        encrypted_chat.body.text = encrypt_for_storage(&chat_signed.body.text, &my_pub);
+        let encrypted_json = serde_json::to_string(&encrypted_chat).unwrap();
+        chain.add_text_block(encrypted_json);
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
@@ -557,7 +592,11 @@ async fn add_group_message(
     // append clear locally
     {
         let mut chain = state.blockchain.lock().await;
-        chain.add_text_block(clear_json.clone());
+        // Encrypt the message for blockchain storage
+        let mut encrypted_chat = chat_signed.clone();
+        encrypted_chat.body.text = encrypt_for_storage(&chat_signed.body.text, &my_pub);
+        let encrypted_json = serde_json::to_string(&encrypted_chat).unwrap();
+        chain.add_text_block(encrypted_json);
         chain.save_to_file(&state.blockchain_path).ok();
     }
     let _ = state.app.emit("chat_update", ());
@@ -584,29 +623,41 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
     let mut out = Vec::new();
     for b in &chain.chain {
         if let Ok(signed) = serde_json::from_str::<ChatSigned>(&b.data) {
-            if signed.body.from == my_pub
-                || signed.body.to.as_deref() == Some(&my_pub)
-                || signed
+            // Decrypt the message text for display
+            let mut decrypted_signed = signed.clone();
+            if let Some(decrypted_text) = decrypt_from_storage(&signed.body.text, &signed.body.from) {
+                decrypted_signed.body.text = decrypted_text;
+            }
+            
+            if decrypted_signed.body.from == my_pub
+                || decrypted_signed.body.to.as_deref() == Some(&my_pub)
+                || decrypted_signed
                     .body
                     .to
                     .as_ref()
                     .map(|gid| state.groups.is_member(gid, &my_pub))
                     .unwrap_or(false)
             {
-                out.push(signed.body);
+                out.push(decrypted_signed.body);
             }
             continue;
         }
         if let Ok(body) = serde_json::from_str::<ChatBody>(&b.data) {
-            if body.from == my_pub
-                || body.to.as_deref() == Some(&my_pub)
-                || body
+            // Decrypt the message text for display
+            let mut decrypted_body = body.clone();
+            if let Some(decrypted_text) = decrypt_from_storage(&body.text, &body.from) {
+                decrypted_body.text = decrypted_text;
+            }
+            
+            if decrypted_body.from == my_pub
+                || decrypted_body.to.as_deref() == Some(&my_pub)
+                || decrypted_body
                     .to
                     .as_ref()
                     .map(|gid| state.groups.is_member(gid, &my_pub))
                     .unwrap_or(false)
             {
-                out.push(body);
+                out.push(decrypted_body);
             }
         }
     }
