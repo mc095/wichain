@@ -514,10 +514,10 @@ async fn add_chat_message(
     }
     let _ = state.app.emit("chat_update", ());
 
-    // obfuscate + send
+    // obfuscate + send (try TCP first, fallback to UDP)
     let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
-    if let Err(e) = state.node.send_direct_block(peer_id, obf_b64).await {
-        warn!("add_chat_message: send_direct_block error -> {}: {e}", peer_id);
+    if let Err(e) = state.node.send_message(peer_id, obf_b64).await {
+        warn!("add_chat_message: send_message error -> {}: {e}", peer_id);
     }
 
     Ok(())
@@ -557,8 +557,8 @@ async fn create_group(
     // Send group creation to all members (except self)
     for member in members.iter().filter(|m| *m != &my_pub) {
         let obf_b64 = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if let Err(e) = state.node.send_direct_block(member, obf_b64).await {
-            warn!("create_group: send_direct_block error -> {}: {e}", member);
+        if let Err(e) = state.node.send_message(member, obf_b64).await {
+            warn!("create_group: send_message error -> {}: {e}", member);
         }
     }
 
@@ -606,7 +606,7 @@ async fn add_group_message(
     // fan‑out: obfuscate uniquely per member
     for member in group.members.iter().filter(|m| *m != &my_pub) {
         let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if let Err(e) = state.node.send_direct_block(member, obf).await {
+        if let Err(e) = state.node.send_message(member, obf).await {
             warn!("group send error -> {}: {e}", member);
         }
     }
@@ -694,14 +694,33 @@ async fn test_network_connectivity(state: tauri::State<'_, AppState>) -> Result<
     
     let mut result = format!("Network Diagnostic:\n");
     result.push_str(&format!("My ID: {}\n", &my_pub[..my_pub.len().min(20)]));
-    result.push_str(&format!("Port: {}\n", WICHAIN_PORT));
+    result.push_str(&format!("UDP Port: {}\n", WICHAIN_PORT));
+    result.push_str(&format!("TCP Port: {}\n", state.node.get_tcp_port()));
     result.push_str(&format!("Peers found: {}\n", peers.len()));
     
     for peer in &peers {
-        result.push_str(&format!("- {} ({})\n", peer.alias, &peer.id[..peer.id.len().min(10)]));
+        let tcp_status = if state.node.has_tcp_connection(&peer.id).await {
+            "TCP"
+        } else {
+            "UDP"
+        };
+        result.push_str(&format!("- {} ({}) [{}]\n", peer.alias, &peer.id[..peer.id.len().min(10)], tcp_status));
     }
     
     Ok(result)
+}
+
+/// Request TCP connection to a specific peer
+#[tauri::command]
+async fn request_tcp_connection(state: tauri::State<'_, AppState>, peer_id: String) -> Result<(), String> {
+    state.node.request_tcp_connection(&peer_id).await
+        .map_err(|e| format!("Failed to request TCP connection: {}", e))
+}
+
+/// Check if we have TCP connection to a peer
+#[tauri::command]
+async fn has_tcp_connection(state: tauri::State<'_, AppState>, peer_id: String) -> Result<bool, String> {
+    Ok(state.node.has_tcp_connection(&peer_id).await)
 }
 
 // -----------------------------------------------------------------------------
@@ -825,6 +844,12 @@ fn main() {
                             | NetworkMessage::Pong { .. } => {
                                 let _ = app_handle_for_task.emit("peer_update", ());
                             }
+                            NetworkMessage::TcpConnectionRequest { .. }
+                            | NetworkMessage::TcpConnectionResponse { .. }
+                            | NetworkMessage::TcpKeepalive { .. } => {
+                                // TCP connection management messages - handled by network layer
+                                let _ = app_handle_for_task.emit("peer_update", ());
+                            }
                             NetworkMessage::Block { .. } => {
                                 // Broadcast unsupported in this build.
                             }
@@ -857,7 +882,9 @@ fn main() {
             add_group_message,
             get_chat_history,
             reset_data,
-            test_network_connectivity
+            test_network_connectivity,
+            request_tcp_connection,
+            has_tcp_connection
         ])
         .run(tauri::generate_context!())
         .expect("Error running WiChain");

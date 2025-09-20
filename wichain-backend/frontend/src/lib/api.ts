@@ -189,3 +189,28 @@ export async function apiTestNetwork(): Promise<string> {
     return 'Network test failed';
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* TCP Connection Management                                          */
+/* ------------------------------------------------------------------ */
+
+/** Request TCP connection to a specific peer. */
+export async function apiRequestTcpConnection(peerId: string): Promise<boolean> {
+  try {
+    await invoke('request_tcp_connection', { peer_id: peerId });
+    return true;
+  } catch (err) {
+    console.error('request_tcp_connection failed', err);
+    return false;
+  }
+}
+
+/** Check if we have TCP connection to a peer. */
+export async function apiHasTcpConnection(peerId: string): Promise<boolean> {
+  try {
+    return await invoke<boolean>('has_tcp_connection', { peer_id: peerId });
+  } catch (err) {
+    console.error('has_tcp_connection failed', err);
+    return false;
+  }
+}

@@ -14,14 +14,17 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::{
-    net::UdpSocket,
-    sync::{mpsc, Mutex},
+    net::{UdpSocket, TcpListener as TokioTcpListener, TcpStream as TokioTcpStream},
+    sync::{mpsc, Mutex, RwLock},
 };
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 
 const BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const PEER_STALE_SECS: u64 = 30;
 const MAX_DGRAM: usize = 8 * 1024;
+const TCP_PORT_OFFSET: u16 = 1000; // TCP port = UDP port + offset
+const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Info exposed to UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +52,26 @@ pub enum NetworkMessage {
         to: String,
         payload_json: String,
     },
+
+    /// TCP connection request (sent via UDP to initiate TCP connection).
+    TcpConnectionRequest {
+        from: String,
+        from_alias: String,
+        tcp_port: u16,
+    },
+
+    /// TCP connection response (sent via UDP to accept/reject TCP connection).
+    TcpConnectionResponse {
+        from: String,
+        to: String,
+        accepted: bool,
+        tcp_port: u16,
+    },
+
+    /// TCP keepalive message.
+    TcpKeepalive {
+        from: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +79,24 @@ struct PeerEntry {
     info: PeerInfo,
     last_seen: Instant,
     last_addr: SocketAddr,
+    tcp_port: Option<u16>,
+}
+
+/// TCP connection state for a peer.
+#[derive(Debug)]
+struct TcpConnection {
+    stream: TokioTcpStream,
+    peer_id: String,
+    last_activity: Instant,
+    is_connected: bool,
+}
+
+/// TCP connection manager.
+#[derive(Debug)]
+struct TcpConnectionManager {
+    connections: Arc<RwLock<HashMap<String, TcpConnection>>>,
+    tcp_listener: Option<TokioTcpListener>,
+    tcp_port: u16,
 }
 
 pub struct NetworkNode {
@@ -64,16 +105,25 @@ pub struct NetworkNode {
     alias: Arc<Mutex<String>>, // mutable at runtime
     pubkey: String,
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
+    tcp_manager: Arc<TcpConnectionManager>,
 }
 
 impl NetworkNode {
     pub fn new(port: u16, id: String, alias: String, pubkey: String) -> Self {
+        let tcp_port = port + TCP_PORT_OFFSET;
+        let tcp_manager = Arc::new(TcpConnectionManager {
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            tcp_listener: None,
+            tcp_port,
+        });
+
         Self {
             port,
             id,
             alias: Arc::new(Mutex::new(alias)),
             pubkey,
             peers: Arc::new(Mutex::new(HashMap::new())),
+            tcp_manager,
         }
     }
 
@@ -89,7 +139,7 @@ impl NetworkNode {
         }
     }
 
-    /// Start receiver + periodic broadcaster.
+    /// Start receiver + periodic broadcaster + TCP listener.
     pub async fn start(&self, tx: mpsc::Sender<NetworkMessage>) {
         // Try primary binding first
         let bind_addr = format!("0.0.0.0:{}", self.port);
@@ -140,6 +190,18 @@ impl NetworkNode {
             let port = self.port;
             tokio::spawn(async move {
                 periodic_broadcast(socket, id, alias, pubkey, port).await;
+            });
+        }
+
+        // Start TCP listener
+        {
+            let tcp_manager = self.tcp_manager.clone();
+            let node_id = self.id.clone();
+            let alias = self.alias.clone();
+            tokio::spawn(async move {
+                if let Err(e) = TcpConnectionManager::start_tcp_listener_static(tcp_manager, node_id, alias).await {
+                    error!("Failed to start TCP listener: {e:?}");
+                }
             });
         }
     }
@@ -203,6 +265,136 @@ impl NetworkNode {
         let map = self.peers.lock().await;
         map.values().map(|p| p.info.clone()).collect()
     }
+
+    /// Send a message via TCP if connection exists, otherwise fallback to UDP.
+    pub async fn send_message(
+        &self,
+        peer_id: &str,
+        payload_json: String,
+    ) -> anyhow::Result<()> {
+        // Try TCP first
+        if let Ok(()) = self.send_via_tcp(peer_id, &payload_json).await {
+            debug!("Message sent via TCP to {}", peer_id);
+            return Ok(());
+        }
+
+        // Fallback to UDP
+        debug!("TCP failed, falling back to UDP for {}", peer_id);
+        self.send_direct_block(peer_id, payload_json).await
+    }
+
+    /// Send message via TCP connection.
+    async fn send_via_tcp(&self, peer_id: &str, _payload: &str) -> anyhow::Result<()> {
+        let connections = self.tcp_manager.connections.read().await;
+        if let Some(conn) = connections.get(peer_id) {
+            if conn.is_connected {
+                // Note: We can't clone TcpStream, so we need to handle this differently
+                // For now, we'll return an error and fall back to UDP
+                return Err(anyhow::anyhow!("TCP stream cloning not supported, falling back to UDP"));
+            }
+        }
+        Err(anyhow::anyhow!("No TCP connection to peer {}", peer_id))
+    }
+
+    /// Request TCP connection to a peer.
+    pub async fn request_tcp_connection(&self, peer_id: &str) -> anyhow::Result<()> {
+        let peers = self.peers.lock().await;
+        if let Some(peer) = peers.get(peer_id) {
+            let alias = { self.alias.lock().await.clone() };
+            let tcp_port = self.tcp_manager.tcp_port;
+            
+            let request = NetworkMessage::TcpConnectionRequest {
+                from: self.id.clone(),
+                from_alias: alias,
+                tcp_port,
+            };
+
+            // Send via UDP
+            let bind_addr = "0.0.0.0:0";
+            let socket = UdpSocket::bind(bind_addr).await?;
+            socket.send_to(&serde_json::to_vec(&request)?, peer.last_addr).await?;
+            
+            info!("TCP connection request sent to {} ({})", peer_id, peer.info.alias);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Peer not found: {}", peer_id))
+        }
+    }
+
+    /// Get TCP port for this node.
+    pub fn get_tcp_port(&self) -> u16 {
+        self.tcp_manager.tcp_port
+    }
+
+    /// Check if we have a TCP connection to a peer.
+    pub async fn has_tcp_connection(&self, peer_id: &str) -> bool {
+        let connections = self.tcp_manager.connections.read().await;
+        connections.get(peer_id).map_or(false, |conn| conn.is_connected)
+    }
+}
+
+impl TcpConnectionManager {
+    /// Start TCP listener for incoming connections (static method).
+    async fn start_tcp_listener_static(
+        tcp_manager: Arc<TcpConnectionManager>,
+        _node_id: String,
+        _alias: Arc<Mutex<String>>,
+    ) -> anyhow::Result<()> {
+        let bind_addr = format!("0.0.0.0:{}", tcp_manager.tcp_port);
+        let listener = TokioTcpListener::bind(&bind_addr).await?;
+        info!("✅ TCP listener started on {}", bind_addr);
+        
+        // Start accepting connections
+        loop {
+            match listener.accept().await {
+                Ok((_stream, addr)) => {
+                    info!("New TCP connection from {}", addr);
+                    // For now, we'll just log the connection
+                    // In a full implementation, we'd need to identify the peer and store the connection
+                }
+                Err(e) => {
+                    error!("TCP accept error: {e:?}");
+                }
+            }
+        }
+    }
+
+    /// Handle incoming TCP connection.
+    async fn handle_incoming_tcp_connection(
+        &self,
+        stream: TokioTcpStream,
+        peer_id: String,
+    ) -> anyhow::Result<()> {
+        let conn = TcpConnection {
+            stream,
+            peer_id: peer_id.clone(),
+            last_activity: Instant::now(),
+            is_connected: true,
+        };
+
+        // Add to connections
+        {
+            let mut connections = self.connections.write().await;
+            connections.insert(peer_id.clone(), conn);
+        }
+
+        info!("TCP connection established with {}", peer_id);
+        Ok(())
+    }
+
+    /// Clean up stale TCP connections.
+    async fn cleanup_stale_connections(&self) {
+        let mut connections = self.connections.write().await;
+        let now = Instant::now();
+        connections.retain(|peer_id, conn| {
+            if now.duration_since(conn.last_activity) > Duration::from_secs(300) {
+                info!("Removing stale TCP connection to {}", peer_id);
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 async fn recv_loop(
@@ -245,6 +437,18 @@ async fn recv_loop(
             NetworkMessage::DirectBlock { from, .. } => {
                 update_peer(&peers, from, from, from, src).await;
             }
+            NetworkMessage::TcpConnectionRequest { from, from_alias, tcp_port } => {
+                update_peer_with_tcp_port(&peers, from, from_alias, from, src, Some(*tcp_port)).await;
+                // TODO: Handle TCP connection request (accept/reject logic)
+                info!("TCP connection request from {} ({}) on port {}", from, from_alias, tcp_port);
+            }
+            NetworkMessage::TcpConnectionResponse { from, to: _to, accepted, tcp_port } => {
+                update_peer_with_tcp_port(&peers, from, from, from, src, Some(*tcp_port)).await;
+                info!("TCP connection response from {}: {} (port {})", from, if *accepted { "accepted" } else { "rejected" }, tcp_port);
+            }
+            NetworkMessage::TcpKeepalive { from } => {
+                update_peer(&peers, from, from, from, src).await;
+            }
             NetworkMessage::Block { .. } => {
                 // legacy ignore
             }
@@ -262,6 +466,17 @@ async fn update_peer(
     pubkey: &str,
     addr: SocketAddr,
 ) {
+    update_peer_with_tcp_port(peers, id, alias, pubkey, addr, None).await;
+}
+
+async fn update_peer_with_tcp_port(
+    peers: &Arc<Mutex<HashMap<String, PeerEntry>>>,
+    id: &str,
+    alias: &str,
+    pubkey: &str,
+    addr: SocketAddr,
+    tcp_port: Option<u16>,
+) {
     let mut map = peers.lock().await;
     let now = Instant::now();
     let entry = map.entry(id.to_string()).or_insert_with(|| PeerEntry {
@@ -273,12 +488,16 @@ async fn update_peer(
         },
         last_seen: now,
         last_addr: addr,
+        tcp_port: None,
     });
     entry.info.alias = alias.to_string();
     entry.info.pubkey = pubkey.to_string();
     entry.last_seen = now;
     entry.last_addr = addr;
     entry.info.last_seen_ms = 0;
+    if let Some(port) = tcp_port {
+        entry.tcp_port = Some(port);
+    }
 }
 
 async fn maybe_gc_stale(peers: &Arc<Mutex<HashMap<String, PeerEntry>>>) {
