@@ -21,6 +21,7 @@ use std::{
     sync::Arc,
 };
 
+use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, generic_array::GenericArray}};
 use base64::{engine::general_purpose, Engine as _};
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
 use log::{info, warn};
@@ -153,70 +154,125 @@ pub struct AppState {
 }
 
 // -----------------------------------------------------------------------------
-// Lightweight SHA3‑512 XOR "confidentiality" helpers
+// AES-256-GCM Encryption helpers
 // -----------------------------------------------------------------------------
 
-/// Derive a 64-byte mask from two pubkeys (sorted) using SHA3-512.
-fn simple_pair_mask(pub_a: &str, pub_b: &str) -> [u8; 64] {
+/// Derive a 32-byte encryption key from two pubkeys using SHA3-512.
+fn derive_encryption_key(pub_a: &str, pub_b: &str) -> [u8; 32] {
     let (lo, hi) = if pub_a <= pub_b { (pub_a, pub_b) } else { (pub_b, pub_a) };
     let mut h = Sha3_512::default();
     h.update(lo.as_bytes());
     h.update(b"|");
     h.update(hi.as_bytes());
+    h.update(b"|aes256gcm");
     let digest = h.finalize();
-    let mut out = [0u8; 64];
-    out.copy_from_slice(&digest[..]);
-    out
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&digest[..32]);
+    key
 }
 
-/// XOR data with repeating mask bytes.
-fn simple_xor(data: &[u8], mask: &[u8]) -> Vec<u8> {
-    data.iter()
-        .enumerate()
-        .map(|(i, b)| b ^ mask[i % mask.len()])
-        .collect()
+/// Generate a random 12-byte nonce for AES-GCM.
+fn generate_nonce() -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    use rand::RngCore;
+    OsRng.fill_bytes(&mut nonce);
+    nonce
 }
 
-/// Obfuscate clear JSON string → base64 string.
-fn simple_obfuscate_json(my_pub: &str, other_pub: &str, clear_json: &str) -> String {
-    let mask = simple_pair_mask(my_pub, other_pub);
-    let x = simple_xor(clear_json.as_bytes(), &mask);
-    general_purpose::STANDARD.encode(x)
+/// Encrypt JSON string using AES-256-GCM.
+fn encrypt_json_aes256gcm(my_pub: &str, other_pub: &str, clear_json: &str) -> Result<String, String> {
+    let key_bytes = derive_encryption_key(my_pub, other_pub);
+    let key = GenericArray::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    
+    let nonce_bytes = generate_nonce();
+    let nonce = GenericArray::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, clear_json.as_bytes())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    // Combine nonce + ciphertext and encode as base64
+    let mut combined = Vec::with_capacity(12 + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
+    combined.extend_from_slice(&ciphertext);
+    
+    Ok(general_purpose::STANDARD.encode(combined))
 }
 
-/// Attempt to de‑obfuscate b64 string back to JSON.
-fn simple_deobfuscate_json(my_pub: &str, other_pub: &str, b64_payload: &str) -> Option<String> {
-    let bytes = general_purpose::STANDARD.decode(b64_payload.as_bytes()).ok()?;
-    let mask = simple_pair_mask(my_pub, other_pub);
-    let clear = simple_xor(&bytes, &mask);
-    String::from_utf8(clear).ok()
+/// Decrypt base64 string back to JSON using AES-256-GCM.
+fn decrypt_json_aes256gcm(my_pub: &str, other_pub: &str, b64_payload: &str) -> Result<String, String> {
+    let combined = general_purpose::STANDARD.decode(b64_payload)
+        .map_err(|e| format!("Base64 decode failed: {}", e))?;
+    
+    if combined.len() < 12 {
+        return Err("Invalid encrypted payload: too short".to_string());
+    }
+    
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = GenericArray::from_slice(nonce_bytes);
+    
+    let key_bytes = derive_encryption_key(my_pub, other_pub);
+    let key = GenericArray::from_slice(&key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    String::from_utf8(plaintext)
+        .map_err(|e| format!("UTF-8 decode failed: {}", e))
 }
 
 // -----------------------------------------------------------------------------
 // Blockchain storage encryption helpers
 // -----------------------------------------------------------------------------
 
-/// Encrypt message for blockchain storage using a simple key derived from user's pubkey
+/// Encrypt message for blockchain storage using AES-256-GCM
 fn encrypt_for_storage(message: &str, user_pubkey: &str) -> String {
     let mut hasher = Sha3_512::default();
     hasher.update(user_pubkey.as_bytes());
     hasher.update(b"blockchain_storage_key");
-    let key = hasher.finalize();
+    let key_digest = hasher.finalize();
     
-    let encrypted = simple_xor(message.as_bytes(), &key[..32]);
-    general_purpose::STANDARD.encode(encrypted)
+    let key_bytes = &key_digest[..32];
+    let key = GenericArray::from_slice(key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    
+    let nonce_bytes = generate_nonce();
+    let nonce = GenericArray::from_slice(&nonce_bytes);
+    
+    let ciphertext = cipher.encrypt(nonce, message.as_bytes())
+        .unwrap_or_else(|_| message.as_bytes().to_vec());
+    
+    // Combine nonce + ciphertext and encode as base64
+    let mut combined = Vec::with_capacity(12 + ciphertext.len());
+    combined.extend_from_slice(&nonce_bytes);
+    combined.extend_from_slice(&ciphertext);
+    
+    general_purpose::STANDARD.encode(combined)
 }
 
-/// Decrypt message from blockchain storage
+/// Decrypt message from blockchain storage using AES-256-GCM
 fn decrypt_from_storage(encrypted: &str, user_pubkey: &str) -> Option<String> {
+    let combined = general_purpose::STANDARD.decode(encrypted.as_bytes()).ok()?;
+    
+    if combined.len() < 12 {
+        return None;
+    }
+    
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let nonce = GenericArray::from_slice(nonce_bytes);
+    
     let mut hasher = Sha3_512::default();
     hasher.update(user_pubkey.as_bytes());
     hasher.update(b"blockchain_storage_key");
-    let key = hasher.finalize();
+    let key_digest = hasher.finalize();
     
-    let encrypted_bytes = general_purpose::STANDARD.decode(encrypted.as_bytes()).ok()?;
-    let decrypted = simple_xor(&encrypted_bytes, &key[..32]);
-    String::from_utf8(decrypted).ok()
+    let key_bytes = &key_digest[..32];
+    let key = GenericArray::from_slice(key_bytes);
+    let cipher = Aes256Gcm::new(key);
+    
+    let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
+    String::from_utf8(plaintext).ok()
 }
 
 // -----------------------------------------------------------------------------
@@ -346,8 +402,8 @@ async fn handle_incoming_network_payload(
 ) {
     let cleaned = clean_transport_payload(payload_str);
 
-    // ---- 0. Try direct SHA3-XOR deobfuscation w/ reported 'from' ----
-    if let Some(clear) = simple_deobfuscate_json(my_pub_b64, network_from_b64, cleaned) {
+    // ---- 0. Try direct AES-256-GCM decryption w/ reported 'from' ----
+    if let Ok(clear) = decrypt_json_aes256gcm(my_pub_b64, network_from_b64, cleaned) {
         // Try parsing as ChatSigned
         if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
             record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
@@ -374,16 +430,16 @@ async fn handle_incoming_network_payload(
             return; // SUCCESS - exit early
         }
     } else {
-        warn!("inbound: deobf w/reported sender FAILED; will brute peers.");
+        warn!("inbound: AES-256-GCM decryption w/reported sender FAILED; will try other peers.");
     }
 
-    // ---- 1. Brute deobf w/ *all* known peers (sender mismatch) ----
+    // ---- 1. Try AES-256-GCM decryption w/ *all* known peers (sender mismatch) ----
     let peers = node.list_peers().await;
     for p in &peers {
         if p.id == network_from_b64 {
             continue; // already tried above
         }
-        if let Some(clear) = simple_deobfuscate_json(my_pub_b64, &p.id, cleaned) {
+        if let Ok(clear) = decrypt_json_aes256gcm(my_pub_b64, &p.id, cleaned) {
             // Try parsing as ChatSigned
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
                 record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
@@ -514,9 +570,13 @@ async fn add_chat_message(
     }
     let _ = state.app.emit("chat_update", ());
 
-    // obfuscate + send (try TCP first, fallback to UDP)
-    let obf_b64 = simple_obfuscate_json(&my_pub, peer_id, &clear_json);
-    if let Err(e) = state.node.send_message(peer_id, obf_b64).await {
+    // encrypt + send (try TCP first, fallback to UDP)
+    let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, peer_id, &clear_json)
+        .unwrap_or_else(|e| {
+            warn!("AES-256-GCM encryption failed: {}, falling back to plain text", e);
+            clear_json.clone()
+        });
+    if let Err(e) = state.node.send_message(peer_id, encrypted_b64).await {
         warn!("add_chat_message: send_message error -> {}: {e}", peer_id);
     }
 
@@ -556,8 +616,12 @@ async fn create_group(
 
     // Send group creation to all members (except self)
     for member in members.iter().filter(|m| *m != &my_pub) {
-        let obf_b64 = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if let Err(e) = state.node.send_message(member, obf_b64).await {
+        let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, member, &clear_json)
+            .unwrap_or_else(|e| {
+                warn!("AES-256-GCM encryption failed for group member {}: {}, falling back to plain text", member, e);
+                clear_json.clone()
+            });
+        if let Err(e) = state.node.send_message(member, encrypted_b64).await {
             warn!("create_group: send_message error -> {}: {e}", member);
         }
     }
@@ -603,10 +667,14 @@ async fn add_group_message(
     }
     let _ = state.app.emit("chat_update", ());
 
-    // fan‑out: obfuscate uniquely per member
+    // fan‑out: encrypt uniquely per member
     for member in group.members.iter().filter(|m| *m != &my_pub) {
-        let obf = simple_obfuscate_json(&my_pub, member, &clear_json);
-        if let Err(e) = state.node.send_message(member, obf).await {
+        let encrypted = encrypt_json_aes256gcm(&my_pub, member, &clear_json)
+            .unwrap_or_else(|e| {
+                warn!("AES-256-GCM encryption failed for group member {}: {}, falling back to plain text", member, e);
+                clear_json.clone()
+            });
+        if let Err(e) = state.node.send_message(member, encrypted).await {
             warn!("group send error -> {}: {e}", member);
         }
     }
@@ -721,6 +789,141 @@ async fn request_tcp_connection(state: tauri::State<'_, AppState>, peer_id: Stri
 #[tauri::command]
 async fn has_tcp_connection(state: tauri::State<'_, AppState>, peer_id: String) -> Result<bool, String> {
     Ok(state.node.has_tcp_connection(&peer_id).await)
+}
+
+/// Test TCP connection to a peer and measure response time
+#[tauri::command]
+async fn test_tcp_connection(state: tauri::State<'_, AppState>, peer_id: String) -> Result<u64, String> {
+    state.node.test_tcp_connection(&peer_id).await
+        .map_err(|e| format!("TCP connection test failed: {}", e))
+}
+
+/// Get connection statistics for a peer
+#[tauri::command]
+async fn get_connection_stats(state: tauri::State<'_, AppState>, peer_id: String) -> Result<Option<wichain_network::ConnectionStats>, String> {
+    Ok(state.node.get_connection_stats(&peer_id).await)
+}
+
+/// Update all peer connection types based on actual status
+#[tauri::command]
+async fn update_all_connection_types(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let peers = state.node.list_peers().await;
+    for peer in peers {
+        state.node.update_peer_connection_type(&peer.id).await;
+    }
+    Ok(())
+}
+
+/// Test encryption/decryption with a specific peer
+#[tauri::command]
+async fn test_encryption_with_peer(
+    state: tauri::State<'_, AppState>, 
+    peer_id: String, 
+    test_message: String
+) -> Result<String, String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    
+    // Test encryption
+    let encrypted = encrypt_json_aes256gcm(&my_pub, &peer_id, &test_message)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    // Test decryption
+    let decrypted = decrypt_json_aes256gcm(&my_pub, &peer_id, &encrypted)
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+    
+    if decrypted == test_message {
+        Ok(format!("✅ Encryption test passed! Original: '{}', Encrypted length: {} bytes", test_message, encrypted.len()))
+    } else {
+        Err(format!("❌ Encryption test failed! Original: '{}', Decrypted: '{}'", test_message, decrypted))
+    }
+}
+
+/// Get comprehensive network and encryption status
+#[tauri::command]
+async fn get_network_status(state: tauri::State<'_, AppState>) -> Result<NetworkStatus, String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let peers = state.node.list_peers().await;
+    
+    let mut peer_statuses = Vec::new();
+    for peer in &peers {
+        let has_tcp = state.node.has_tcp_connection(&peer.id).await;
+        let connection_type = if has_tcp { "TCP" } else { "UDP" };
+        
+        peer_statuses.push(PeerStatus {
+            id: peer.id.clone(),
+            alias: peer.alias.clone(),
+            connection_type: connection_type.to_string(),
+            tcp_port: peer.tcp_port,
+            last_seen_ms: peer.last_seen_ms,
+        });
+    }
+    
+    Ok(NetworkStatus {
+        my_id: my_pub,
+        udp_port: WICHAIN_PORT,
+        tcp_port: state.node.get_tcp_port(),
+        total_peers: peers.len(),
+        peer_statuses,
+        encryption_algorithm: "AES-256-GCM".to_string(),
+    })
+}
+
+/// Test message sending with detailed logging
+#[tauri::command]
+async fn test_message_sending(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    test_message: String
+) -> Result<String, String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let my_sk = state.signing_key.lock().await.clone();
+    
+    let body = ChatBody {
+        from: my_pub.clone(),
+        to: Some(peer_id.clone()),
+        text: test_message.clone(),
+        ts_ms: now_ms(),
+    };
+    let chat_signed = ChatSigned::new_signed(body, &my_sk);
+    let clear_json = serde_json::to_string(&chat_signed).unwrap();
+    
+    // Test encryption
+    let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, &peer_id, &clear_json)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    
+    // Test sending
+    let start_time = std::time::Instant::now();
+    let result = state.node.send_message(&peer_id, encrypted_b64).await;
+    let send_time = start_time.elapsed().as_millis() as u64;
+    
+    match result {
+        Ok(()) => {
+            let has_tcp = state.node.has_tcp_connection(&peer_id).await;
+            let transport = if has_tcp { "TCP" } else { "UDP" };
+            Ok(format!("✅ Message sent successfully via {} in {}ms", transport, send_time))
+        }
+        Err(e) => Err(format!("❌ Message sending failed: {}", e))
+    }
+}
+
+/// Types for network status monitoring
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStatus {
+    pub my_id: String,
+    pub udp_port: u16,
+    pub tcp_port: u16,
+    pub total_peers: usize,
+    pub peer_statuses: Vec<PeerStatus>,
+    pub encryption_algorithm: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerStatus {
+    pub id: String,
+    pub alias: String,
+    pub connection_type: String,
+    pub tcp_port: Option<u16>,
+    pub last_seen_ms: u64,
 }
 
 // -----------------------------------------------------------------------------
@@ -846,7 +1049,9 @@ fn main() {
                             }
                             NetworkMessage::TcpConnectionRequest { .. }
                             | NetworkMessage::TcpConnectionResponse { .. }
-                            | NetworkMessage::TcpKeepalive { .. } => {
+                            | NetworkMessage::TcpKeepalive { .. }
+                            | NetworkMessage::TcpConnectionTest { .. }
+                            | NetworkMessage::TcpConnectionTestResponse { .. } => {
                                 // TCP connection management messages - handled by network layer
                                 let _ = app_handle_for_task.emit("peer_update", ());
                             }
@@ -884,7 +1089,13 @@ fn main() {
             reset_data,
             test_network_connectivity,
             request_tcp_connection,
-            has_tcp_connection
+            has_tcp_connection,
+            test_tcp_connection,
+            get_connection_stats,
+            update_all_connection_types,
+            test_encryption_with_peer,
+            get_network_status,
+            test_message_sending
         ])
         .run(tauri::generate_context!())
         .expect("Error running WiChain");

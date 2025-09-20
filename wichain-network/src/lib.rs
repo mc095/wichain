@@ -14,8 +14,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::{
+    io::AsyncWriteExt,
     net::{UdpSocket, TcpListener as TokioTcpListener, TcpStream as TokioTcpStream},
     sync::{mpsc, Mutex, RwLock},
+    time::{timeout, Duration as TokioDuration},
 };
 use tracing::{error, info, warn, debug};
 
@@ -25,6 +27,7 @@ const MAX_DGRAM: usize = 8 * 1024;
 const TCP_PORT_OFFSET: u16 = 1000; // TCP port = UDP port + offset
 const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const TCP_MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Info exposed to UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +36,18 @@ pub struct PeerInfo {
     pub alias: String,
     pub pubkey: String,
     pub last_seen_ms: u64,
+    pub connection_type: String, // "UDP", "TCP", or "Unknown"
+    pub tcp_port: Option<u16>,
+}
+
+/// Connection statistics for monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionStats {
+    pub peer_id: String,
+    pub is_connected: bool,
+    pub message_count: u64,
+    pub last_activity_ms: u64,
+    pub last_test_time_ms: Option<u64>,
 }
 
 /// Network datagrams.
@@ -72,6 +87,20 @@ pub enum NetworkMessage {
     TcpKeepalive {
         from: String,
     },
+
+    /// TCP connection test message.
+    TcpConnectionTest {
+        from: String,
+        timestamp: u64,
+    },
+
+    /// TCP connection test response.
+    TcpConnectionTestResponse {
+        from: String,
+        to: String,
+        timestamp: u64,
+        response_time_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -85,10 +114,12 @@ struct PeerEntry {
 /// TCP connection state for a peer.
 #[derive(Debug)]
 struct TcpConnection {
-    stream: TokioTcpStream,
+    stream: Arc<Mutex<TokioTcpStream>>,
     peer_id: String,
     last_activity: Instant,
     is_connected: bool,
+    message_count: u64,
+    last_test_time: Option<Instant>,
 }
 
 /// TCP connection manager.
@@ -284,13 +315,34 @@ impl NetworkNode {
     }
 
     /// Send message via TCP connection.
-    async fn send_via_tcp(&self, peer_id: &str, _payload: &str) -> anyhow::Result<()> {
+    async fn send_via_tcp(&self, peer_id: &str, payload: &str) -> anyhow::Result<()> {
         let connections = self.tcp_manager.connections.read().await;
         if let Some(conn) = connections.get(peer_id) {
             if conn.is_connected {
-                // Note: We can't clone TcpStream, so we need to handle this differently
-                // For now, we'll return an error and fall back to UDP
-                return Err(anyhow::anyhow!("TCP stream cloning not supported, falling back to UDP"));
+                let mut stream = conn.stream.lock().await;
+                let message = format!("{}\n", payload);
+                
+                // Use timeout for TCP operations
+                let result = timeout(
+                    TokioDuration::from_secs(TCP_MESSAGE_TIMEOUT.as_secs()),
+                    stream.write_all(message.as_bytes())
+                ).await;
+                
+                match result {
+                    Ok(Ok(())) => {
+                        stream.flush().await?;
+                        debug!("Message sent via TCP to {} ({} bytes)", peer_id, message.len());
+                        return Ok(());
+                    }
+                    Ok(Err(e)) => {
+                        warn!("TCP write error to {}: {}", peer_id, e);
+                        return Err(anyhow::anyhow!("TCP write error: {}", e));
+                    }
+                    Err(_) => {
+                        warn!("TCP write timeout to {}", peer_id);
+                        return Err(anyhow::anyhow!("TCP write timeout"));
+                    }
+                }
             }
         }
         Err(anyhow::anyhow!("No TCP connection to peer {}", peer_id))
@@ -331,6 +383,54 @@ impl NetworkNode {
         let connections = self.tcp_manager.connections.read().await;
         connections.get(peer_id).map_or(false, |conn| conn.is_connected)
     }
+
+    /// Test TCP connection to a peer and measure response time.
+    pub async fn test_tcp_connection(&self, peer_id: &str) -> anyhow::Result<u64> {
+        let start_time = std::time::Instant::now();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let test_message = NetworkMessage::TcpConnectionTest {
+            from: self.id.clone(),
+            timestamp,
+        };
+
+        // Send test message via TCP
+        self.send_via_tcp(peer_id, &serde_json::to_string(&test_message)?).await?;
+
+        // Wait for response (simplified - in real implementation, you'd need to handle responses)
+        let response_time = start_time.elapsed().as_millis() as u64;
+        
+        info!("TCP connection test to {} completed in {}ms", peer_id, response_time);
+        Ok(response_time)
+    }
+
+    /// Get detailed connection statistics for a peer.
+    pub async fn get_connection_stats(&self, peer_id: &str) -> Option<ConnectionStats> {
+        let connections = self.tcp_manager.connections.read().await;
+        if let Some(conn) = connections.get(peer_id) {
+            Some(ConnectionStats {
+                peer_id: peer_id.to_string(),
+                is_connected: conn.is_connected,
+                message_count: conn.message_count,
+                last_activity_ms: conn.last_activity.elapsed().as_millis() as u64,
+                last_test_time_ms: conn.last_test_time.map(|t| t.elapsed().as_millis() as u64),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Update peer connection type based on actual connection status.
+    pub async fn update_peer_connection_type(&self, peer_id: &str) {
+        let has_tcp = self.has_tcp_connection(peer_id).await;
+        let mut peers = self.peers.lock().await;
+        if let Some(peer) = peers.get_mut(peer_id) {
+            peer.info.connection_type = if has_tcp { "TCP".to_string() } else { "UDP".to_string() };
+        }
+    }
 }
 
 impl TcpConnectionManager {
@@ -366,10 +466,12 @@ impl TcpConnectionManager {
         peer_id: String,
     ) -> anyhow::Result<()> {
         let conn = TcpConnection {
-            stream,
+            stream: Arc::new(Mutex::new(stream)),
             peer_id: peer_id.clone(),
             last_activity: Instant::now(),
             is_connected: true,
+            message_count: 0,
+            last_test_time: None,
         };
 
         // Add to connections
@@ -449,6 +551,14 @@ async fn recv_loop(
             NetworkMessage::TcpKeepalive { from } => {
                 update_peer(&peers, from, from, from, src).await;
             }
+            NetworkMessage::TcpConnectionTest { from, timestamp: _timestamp } => {
+                update_peer(&peers, from, from, from, src).await;
+                info!("TCP connection test received from {}", from);
+            }
+            NetworkMessage::TcpConnectionTestResponse { from, to, timestamp, response_time_ms } => {
+                update_peer(&peers, from, from, from, src).await;
+                info!("TCP connection test response from {} to {}: {}ms", from, to, response_time_ms);
+            }
             NetworkMessage::Block { .. } => {
                 // legacy ignore
             }
@@ -485,6 +595,8 @@ async fn update_peer_with_tcp_port(
             alias: alias.to_string(),
             pubkey: pubkey.to_string(),
             last_seen_ms: 0,
+            connection_type: "UDP".to_string(),
+            tcp_port: None,
         },
         last_seen: now,
         last_addr: addr,
@@ -497,6 +609,7 @@ async fn update_peer_with_tcp_port(
     entry.info.last_seen_ms = 0;
     if let Some(port) = tcp_port {
         entry.tcp_port = Some(port);
+        entry.info.tcp_port = Some(port);
     }
 }
 

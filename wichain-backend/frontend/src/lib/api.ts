@@ -214,3 +214,106 @@ export async function apiHasTcpConnection(peerId: string): Promise<boolean> {
     return false;
   }
 }
+
+/** Test TCP connection to a peer and measure response time. */
+export async function apiTestTcpConnection(peerId: string): Promise<number> {
+  try {
+    return await invoke<number>('test_tcp_connection', { peer_id: peerId });
+  } catch (err) {
+    console.error('test_tcp_connection failed', err);
+    return -1;
+  }
+}
+
+/** Get connection statistics for a peer. */
+export async function apiGetConnectionStats(peerId: string): Promise<ConnectionStats | null> {
+  try {
+    return await invoke<ConnectionStats | null>('get_connection_stats', { peer_id: peerId });
+  } catch (err) {
+    console.error('get_connection_stats failed', err);
+    return null;
+  }
+}
+
+/** Update all peer connection types based on actual status. */
+export async function apiUpdateAllConnectionTypes(): Promise<boolean> {
+  try {
+    await invoke('update_all_connection_types');
+    return true;
+  } catch (err) {
+    console.error('update_all_connection_types failed', err);
+    return false;
+  }
+}
+
+/** Test encryption/decryption with a specific peer. */
+export async function apiTestEncryptionWithPeer(peerId: string, testMessage: string): Promise<string> {
+  try {
+    return await invoke<string>('test_encryption_with_peer', { 
+      peer_id: peerId, 
+      test_message: testMessage 
+    });
+  } catch (err) {
+    console.error('test_encryption_with_peer failed', err);
+    return `❌ Encryption test failed: ${err}`;
+  }
+}
+
+/** Get comprehensive network and encryption status. */
+export async function apiGetNetworkStatus(): Promise<NetworkStatus> {
+  try {
+    return await invoke<NetworkStatus>('get_network_status');
+  } catch (err) {
+    console.error('get_network_status failed', err);
+    return {
+      my_id: '',
+      udp_port: 0,
+      tcp_port: 0,
+      total_peers: 0,
+      peer_statuses: [],
+      encryption_algorithm: 'Unknown'
+    };
+  }
+}
+
+/** Test message sending with detailed logging. */
+export async function apiTestMessageSending(peerId: string, testMessage: string): Promise<string> {
+  try {
+    return await invoke<string>('test_message_sending', { 
+      peer_id: peerId, 
+      test_message: testMessage 
+    });
+  } catch (err) {
+    console.error('test_message_sending failed', err);
+    return `❌ Message sending test failed: ${err}`;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Types for Connection Monitoring                                    */
+/* ------------------------------------------------------------------ */
+
+export interface ConnectionStats {
+  peer_id: string;
+  is_connected: boolean;
+  message_count: number;
+  last_activity_ms: number;
+  last_test_time_ms?: number;
+}
+
+export interface NetworkStatus {
+  my_id: string;
+  udp_port: number;
+  tcp_port: number;
+  total_peers: number;
+  peer_statuses: PeerStatus[];
+  encryption_algorithm: string;
+}
+
+export interface PeerStatus {
+  id: string;
+  alias: string;
+  connection_type: string;
+  tcp_port?: number;
+  last_seen_ms: number;
+}
