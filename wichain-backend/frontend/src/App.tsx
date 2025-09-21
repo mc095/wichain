@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import './mobile.css';
 import {
   apiGetIdentity,
   apiSetAlias,
@@ -36,7 +37,8 @@ import {
   Power,
   Image,
   Menu,
-  Lock
+  Lock,
+  Trash2
 } from 'lucide-react';
 
 type Target =
@@ -266,6 +268,46 @@ export default function App() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [leftPanelWidth, setLeftPanelWidth] = useState(320); // Increased from default
+  const [isResizing, setIsResizing] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Check for mobile screen size
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case 'b':
+            e.preventDefault();
+            setSidebarOpen(!sidebarOpen);
+            break;
+          case 'k':
+            e.preventDefault();
+            if (sidebarOpen) {
+              const query = prompt('Search conversations...');
+              if (query !== null) {
+                setSearchQuery(query);
+              }
+            }
+            break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [sidebarOpen]);
   const send = useCallback(async () => {
     const msg = text.trim();
     const hasImage = selectedImage !== null;
@@ -405,6 +447,50 @@ export default function App() {
       }
     }
   }, [target, refreshMessages]);
+
+  // Resize handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isResizing || isMobile) return;
+    
+    const newWidth = e.clientX;
+    const minWidth = isMobile ? 280 : 250;
+    const maxWidth = isMobile ? 350 : 500;
+    
+    if (newWidth >= minWidth && newWidth <= maxWidth) {
+      setLeftPanelWidth(newWidth);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsResizing(false);
+  };
+
+  // Add event listeners for resizing
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    } else {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
 
   // Onboarding
   async function onboardingDone(alias: string) {
@@ -568,7 +654,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-screen text-white overflow-hidden ${darkMode ? 'bg-gradient-to-br from-black via-slate-900 to-slate-700' : 'bg-gradient-to-br from-gray-50 to-gray-100'}`}>
+    <div className={`flex h-screen text-white overflow-hidden mobile-scroll ${darkMode ? 'bg-gradient-to-br from-black via-slate-900 to-slate-700' : 'bg-gradient-to-br from-gray-50 to-gray-100'} ${isResizing ? 'select-none' : ''}`}>
       {/* Left Sidebar - Global Navigation */}
       <motion.div 
         className="w-16 bg-slate-800/50 backdrop-blur-xl border-r border-slate-700/50 flex flex-col items-center py-4 space-y-4"
@@ -651,10 +737,25 @@ export default function App() {
 
       {/* Chat List Sidebar */}
       <motion.div 
-        className={`${sidebarOpen ? 'w-80' : 'w-0'} bg-slate-800/30 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300 overflow-hidden`}
+        className={`${sidebarOpen ? '' : 'w-0'} bg-slate-800/30 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300 overflow-hidden relative mobile-scroll ${isMobile ? 'sidebar-mobile' : ''}`}
+        style={{ width: sidebarOpen ? `${isMobile ? 300 : leftPanelWidth}px` : '0px' }}
         initial={{ width: 0 }}
-        animate={{ width: sidebarOpen ? 320 : 0 }}
+        animate={{ width: sidebarOpen ? (isMobile ? 300 : leftPanelWidth) : 0 }}
       >
+        {/* Resize Handle */}
+        {sidebarOpen && !isMobile && (
+          <div
+            className="absolute top-0 right-0 w-1 h-full bg-slate-600/50 hover:bg-slate-500/70 cursor-col-resize z-10 group"
+            onMouseDown={handleMouseDown}
+          >
+            <div className="absolute top-1/2 right-1 transform translate-x-2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="bg-slate-800 text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap">
+                {leftPanelWidth}px • Drag to resize
+              </div>
+            </div>
+          </div>
+        )}
+
         {sidebarOpen && (
           <div className="h-full flex flex-col">
             {/* Header */}
@@ -733,25 +834,44 @@ export default function App() {
               </div>
 
               <div className="flex items-center space-x-2">
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Search messages..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="px-3 py-1 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white text-sm placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors w-48"
-                  />
-                  <Search size={14} className="absolute right-2 top-1/2 transform -translate-y-1/2 text-slate-400" />
-                </div>
+                <button 
+                  onClick={() => {
+                    if (searchQuery) {
+                      setSearchQuery('');
+                    } else {
+                      const query = prompt('Search messages...');
+                      if (query !== null) {
+                        setSearchQuery(query);
+                      }
+                    }
+                  }}
+                  className={`p-2 rounded-lg transition-colors ${
+                    searchQuery 
+                      ? 'text-blue-400 hover:text-blue-300 bg-blue-900/20 hover:bg-blue-900/30' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                  }`}
+                  title={searchQuery ? 'Clear Search' : 'Search Messages'}
+                >
+                  {searchQuery ? <X size={16} /> : <Search size={16} />}
+                </button>
                 <button 
                   onClick={clearCurrentChat}
                   className="p-2 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-900/20 transition-colors"
                   title="Clear Chat"
                 >
-                  <X size={16} />
+                  <Trash2 size={16} />
                 </button>
               </div>
             </motion.div>
+
+            {/* Search Results Indicator */}
+            {searchQuery && (
+              <div className="px-4 py-2 bg-blue-900/20 border-b border-blue-700/30">
+                <p className="text-blue-300 text-sm">
+                  🔍 Searching for: "{searchQuery}"
+                </p>
+              </div>
+            )}
 
             {/* Chat Messages */}
             <div className="flex-1 overflow-hidden">
@@ -791,7 +911,7 @@ export default function App() {
 
             {/* Message Input */}
             <motion.div 
-              className="bg-slate-800/50 backdrop-blur-xl border-t border-slate-700/50 p-4"
+              className={`bg-slate-800/50 backdrop-blur-xl border-t border-slate-700/50 p-4 ${isMobile ? 'message-input-mobile safe-area-bottom' : ''}`}
               initial={{ y: 50, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.3 }}

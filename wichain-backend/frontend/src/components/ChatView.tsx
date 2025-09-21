@@ -26,6 +26,14 @@ export function ChatView({
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
+  const [randomWallpaper, setRandomWallpaper] = useState('');
+
+  // Generate random wallpaper on component mount
+  useEffect(() => {
+    const wallpapers = ['wall-1.png', 'wall-2.png', 'wall-3.png'];
+    const randomIndex = Math.floor(Math.random() * wallpapers.length);
+    setRandomWallpaper(`/wallpapers/${wallpapers[randomIndex]}`);
+  }, [selectedTarget]);
 
   // Filter messages for the selected target and search
   const filteredMessages = messages.filter((msg) => {
@@ -74,10 +82,15 @@ export function ChatView({
   useEffect(() => {
     if (scrollRef.current && !searchQuery.trim()) {
       const scrollContainer = scrollRef.current;
-      // Use setTimeout to ensure DOM is fully updated
-      setTimeout(() => {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }, 100);
+      // Only scroll if user is near bottom (within 100px)
+      const isNearBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 100;
+      
+      if (isNearBottom) {
+        // Use requestAnimationFrame for smooth scroll
+        requestAnimationFrame(() => {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        });
+      }
     }
   }, [filteredMessages, searchQuery]);
 
@@ -85,9 +98,18 @@ export function ChatView({
   useEffect(() => {
     if (scrollRef.current) {
       const scrollContainer = scrollRef.current;
-      setTimeout(() => {
+      // Use multiple methods to ensure scroll works
+      const scrollToBottom = () => {
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }, 200);
+      };
+      
+      // Immediate scroll
+      scrollToBottom();
+      
+      // Delayed scrolls to handle dynamic content
+      setTimeout(scrollToBottom, 100);
+      setTimeout(scrollToBottom, 300);
+      setTimeout(scrollToBottom, 500);
     }
   }, [selectedTarget]);
 
@@ -105,17 +127,18 @@ export function ChatView({
     const scrollContainer = scrollRef.current;
     if (scrollContainer) {
       scrollContainer.addEventListener('scroll', handleScroll);
+      // Initial check
+      handleScroll();
       return () => scrollContainer.removeEventListener('scroll', handleScroll);
     }
-  }, []);
+  }, [filteredMessages]);
 
   // Scroll to bottom function
   const scrollToBottom = () => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: 'smooth'
-      });
+      const container = scrollRef.current;
+      // Force immediate scroll to bottom
+      container.scrollTop = container.scrollHeight;
     }
   };
 
@@ -183,8 +206,14 @@ export function ChatView({
           animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
       >
-        {/* Animated Background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-purple-500/10 to-pink-500/10">
+        {/* Random Wallpaper Background */}
+        <div 
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+          style={{
+            backgroundImage: randomWallpaper ? `url(${randomWallpaper})` : 'linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%)'
+          }}
+        >
+          <div className="absolute inset-0 bg-black/40"></div>
           <div className="absolute inset-0 opacity-20" style={{
             backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='0.1'%3E%3Ccircle cx='30' cy='30' r='2'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
           }}></div>
@@ -221,14 +250,17 @@ export function ChatView({
 
       {/* Messages */}
       <div 
-        className="flex-1 overflow-y-auto p-4 scroll-smooth relative" 
+        className="flex-1 overflow-y-auto p-4 relative" 
         ref={scrollRef}
         style={{ 
-          scrollBehavior: 'smooth',
-          WebkitOverflowScrolling: 'touch'
+          scrollBehavior: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          height: '100%',
+          maxHeight: 'calc(100vh - 200px)',
+          overscrollBehavior: 'contain'
         }}
       >
-        <div className="space-y-6">
+        <div className="space-y-6 pb-20">
           <AnimatePresence>
             {Object.entries(groupedMessages).map(([date, dateMessages], dateIndex) => (
               <motion.div

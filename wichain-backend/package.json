@@ -1,5 +1,16 @@
 {
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "dev:android": "tauri android dev",
+    "build:android": "tauri android build",
+    "dev:ios": "tauri ios dev",
+    "build:ios": "tauri ios build"
+  },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.6.2"
+    "@tauri-apps/cli": "^2.0.0-rc.18"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.1"
   }
 }
