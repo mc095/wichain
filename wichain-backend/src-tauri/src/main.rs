@@ -389,14 +389,16 @@ async fn record_decrypted_chat(
         }
     }
     
-    // Save to MongoDB
+    // Save to MongoDB (with encrypted text)
     {
         let mongodb_guard = mongodb.lock().await;
         if let Some(storage) = mongodb_guard.as_ref() {
+            // Use the encrypted text for MongoDB storage
+            let encrypted_text = encrypt_for_storage(&chat_signed.body.text, &chat_signed.body.from);
             let mongo_message = blockchain_to_mongo_message(
                 chat_signed.body.from.clone(),
                 chat_signed.body.to.clone().unwrap_or_default(),
-                chat_signed.body.text.clone(),
+                encrypted_text, // Use encrypted text
                 chat_signed.body.ts_ms,
                 chat_signed.sig_b64.clone(),
                 true, // encrypted
@@ -596,14 +598,16 @@ async fn add_chat_message(
         chain.save_to_file(&state.blockchain_path).ok();
     }
     
-    // Save to MongoDB
+    // Save to MongoDB (with encrypted text)
     {
         let mongodb_guard = state.mongodb.lock().await;
         if let Some(storage) = mongodb_guard.as_ref() {
+            // Use the encrypted text for MongoDB storage
+            let encrypted_text = encrypt_for_storage(&chat_signed.body.text, &my_pub);
             let mongo_message = blockchain_to_mongo_message(
                 chat_signed.body.from.clone(),
                 chat_signed.body.to.clone().unwrap_or_default(),
-                chat_signed.body.text.clone(),
+                encrypted_text, // Use encrypted text
                 chat_signed.body.ts_ms,
                 chat_signed.sig_b64.clone(),
                 true, // encrypted
@@ -744,10 +748,17 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
             Ok(mongo_messages) => {
                 let mut out = Vec::new();
                 for mongo_msg in mongo_messages {
+                    // Decrypt the message text for display
+                    let decrypted_text = if mongo_msg.encrypted {
+                        decrypt_from_storage(&mongo_msg.message, &mongo_msg.from).unwrap_or_else(|| mongo_msg.message.clone())
+                    } else {
+                        mongo_msg.message.clone()
+                    };
+                    
                     let chat_body = ChatBody {
                         from: mongo_msg.from,
                         to: Some(mongo_msg.to),
-                        text: mongo_msg.message,
+                        text: decrypted_text,
                         ts_ms: mongo_msg.timestamp,
                     };
                     out.push(chat_body);
