@@ -257,8 +257,6 @@ export function GroupModal({ open, onClose, peers, onCreateGroup }: Props) {
                           </p>
                         </div>
                         
-                        <span className="px-2 py-1 rounded-full text-xs bg-slate-500/20 text-slate-300">
-                        </span>
                       </motion.div>
                     ))
                   )}

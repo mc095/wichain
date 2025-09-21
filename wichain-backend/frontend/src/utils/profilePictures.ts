@@ -1,17 +1,17 @@
 // Utility functions for random profile picture selection
 
 const PROFILE_PICTURES = [
-  'pfp/2.jpg',
-  'pfp/4.jpg', 
-  'pfp/6.jpg',
-  'pfp/7.jpg',
-  'pfp/8.jpg',
-  'pfp/10.jpg',
-  'pfp/11.jpg',
-  'pfp/12.jpg',
-  'pfp/13.jpg',
-  'pfp/14.jpg',
-  'pfp/15.jpg'
+  '/pfp/2.jpg',
+  '/pfp/4.jpg', 
+  '/pfp/6.jpg',
+  '/pfp/7.jpg',
+  '/pfp/8.jpg',
+  '/pfp/10.jpg',
+  '/pfp/11.jpg',
+  '/pfp/12.jpg',
+  '/pfp/13.jpg',
+  '/pfp/14.jpg',
+  '/pfp/15.jpg'
 ];
 
 /**

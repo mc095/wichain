@@ -3,12 +3,11 @@ import {
   MessageCircle, 
   Users, 
   Pin,
-  Trash2,
   Edit3
 } from 'lucide-react';
 import type { PeerInfo, GroupInfo } from '../lib/api';
 import { getRandomProfilePicture, getRandomGroupProfilePicture } from '../utils/profilePictures';
-import { apiDeletePeerMessages, apiDeleteGroup, apiUpdateGroupName } from '../lib/api';
+import { apiUpdateGroupName } from '../lib/api';
 import { useState } from 'react';
 
 interface Props {
@@ -20,8 +19,6 @@ interface Props {
   onSelectPeer: (id: string) => void;
   onSelectGroup: (id: string) => void;
   messages: any[]; // Add messages prop to get real latest messages
-  onDeletePeer?: (id: string) => void;
-  onDeleteGroup?: (id: string) => void;
 }
 
 export function PeerList({ 
@@ -32,9 +29,7 @@ export function PeerList({
   selected, 
   onSelectPeer, 
   onSelectGroup,
-  messages,
-  onDeletePeer,
-  onDeleteGroup
+  messages
 }: Props) {
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState('');
@@ -92,27 +87,6 @@ export function PeerList({
     return { color: 'bg-green-500', text: '' };
   };
 
-  const handleDeletePeer = async (peerId: string, peerAlias: string) => {
-    if (window.confirm(`Are you sure you want to delete all messages with ${peerAlias}? This action cannot be undone.`)) {
-      const success = await apiDeletePeerMessages(peerId);
-      if (success) {
-        onDeletePeer?.(peerId);
-      } else {
-        alert('Failed to delete messages. Please try again.');
-      }
-    }
-  };
-
-  const handleDeleteGroup = async (groupId: string, groupName: string) => {
-    if (window.confirm(`Are you sure you want to delete the group "${groupName}" and all its messages? This action cannot be undone.`)) {
-      const success = await apiDeleteGroup(groupId);
-      if (success) {
-        onDeleteGroup?.(groupId);
-      } else {
-        alert('Failed to delete group. Please try again.');
-      }
-    }
-  };
 
 
   const handleSaveGroup = async (groupId: string) => {
@@ -203,16 +177,6 @@ export function PeerList({
                             <span className={`px-2 py-1 rounded-full text-xs ${status.color} text-white`}>
                               {status.text}
                             </span>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeletePeer(peer.id, peer.alias);
-                              }}
-                              className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-900/20"
-                              title="Delete conversation"
-                            >
-                              <Trash2 size={14} />
-                            </button>
                           </div>
                         </div>
                         
@@ -343,16 +307,6 @@ export function PeerList({
                                 title="Edit group"
                               >
                                 <Edit3 size={14} />
-                              </button>
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteGroup(group.id, groupName);
-                                }}
-                                className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-900/20"
-                                title="Delete group"
-                              >
-                                <Trash2 size={14} />
                               </button>
                             </div>
                           </div>

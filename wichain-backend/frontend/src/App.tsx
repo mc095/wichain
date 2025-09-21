@@ -10,8 +10,6 @@ import {
   apiResetData,
   apiCreateGroup,
   apiListGroups,
-  apiDeletePeerMessages,
-  apiDeleteGroup,
   apiExportMessagesToJson,
   type Identity,
   type PeerInfo,
@@ -437,31 +435,6 @@ export default function App() {
     }
   }, [target, refreshMessages]);
 
-  // Delete peer messages
-  const handleDeletePeer = useCallback(async (peerId: string) => {
-    const success = await apiDeletePeerMessages(peerId);
-    if (success) {
-      refreshMessages();
-      refreshPeers();
-      // If the deleted peer was selected, clear selection
-      if (target?.kind === 'peer' && target.id === peerId) {
-        setTarget(null);
-      }
-    }
-  }, [target, refreshMessages, refreshPeers]);
-
-  // Delete group
-  const handleDeleteGroup = useCallback(async (groupId: string) => {
-    const success = await apiDeleteGroup(groupId);
-    if (success) {
-      refreshMessages();
-      refreshGroups();
-      // If the deleted group was selected, clear selection
-      if (target?.kind === 'group' && target.id === groupId) {
-        setTarget(null);
-      }
-    }
-  }, [target, refreshMessages, refreshGroups]);
 
   // Export messages to JSON
   const handleExportMessages = useCallback(async () => {
@@ -562,8 +535,10 @@ export default function App() {
     const full = Array.from(new Set([myPub, ...memberIds]));
     const gid = await apiCreateGroup(full, groupName);
     if (gid) {
-      await refreshGroups();
+      // Set target immediately for better UX
       setTarget({ kind: 'group', id: gid });
+      // Refresh groups in background
+      refreshGroups();
     }
   };
 
@@ -845,8 +820,6 @@ export default function App() {
                 setTarget({ kind: 'group', id });
               }}
                 messages={messages}
-                onDeletePeer={handleDeletePeer}
-                onDeleteGroup={handleDeleteGroup}
               />
             </div>
           </div>
