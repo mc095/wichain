@@ -13,7 +13,6 @@ import {
   apiDeletePeerMessages,
   apiDeleteGroup,
   apiExportMessagesToJson,
-  apiSetProfilePicture,
   type Identity,
   type PeerInfo,
   type ChatBody,
@@ -25,6 +24,7 @@ import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { listen } from '@tauri-apps/api/event';
+import { getRandomProfilePicture } from './utils/profilePictures';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -96,7 +96,6 @@ export default function App() {
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editAlias, setEditAlias] = useState('');
-  const [selectedProfileImage, setSelectedProfileImage] = useState<File | null>(null);
   const [appStartTime] = useState(Date.now());
 
   const nextSlide = () => {
@@ -476,70 +475,29 @@ export default function App() {
   }, []);
 
   // Profile editing functions
-  const handleProfileImageSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      // Check file size (limit to 2MB)
-      const MAX_SIZE = 2 * 1024 * 1024; // 2MB
-      if (file.size > MAX_SIZE) {
-        alert(`Image too large! Maximum size is ${MAX_SIZE / (1024 * 1024)}MB. Your image is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`);
-        return;
-      }
-      
-      setSelectedProfileImage(file);
-    }
-  }, []);
 
   const handleSaveProfile = useCallback(async () => {
     if (!identity) return;
 
     try {
-      let profilePictureData = identity.profile_picture;
-      
-      // If new image selected, convert to base64
-      if (selectedProfileImage) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const base64 = e.target?.result as string;
-          profilePictureData = base64;
-          
-          // Save both alias and profile picture
-          Promise.all([
-            apiSetAlias(editAlias),
-            apiSetProfilePicture(profilePictureData)
-          ]).then(([aliasSuccess, pictureSuccess]) => {
-            if (aliasSuccess && pictureSuccess) {
-              loadIdentity();
-              setIsEditingProfile(false);
-              setEditAlias('');
-              setSelectedProfileImage(null);
-            } else {
-              alert('Failed to save profile. Please try again.');
-            }
-          });
-        };
-        reader.readAsDataURL(selectedProfileImage);
+      // Just save alias
+      const success = await apiSetAlias(editAlias);
+      if (success) {
+        loadIdentity();
+        setIsEditingProfile(false);
+        setEditAlias('');
       } else {
-        // Just save alias
-        const success = await apiSetAlias(editAlias);
-        if (success) {
-          loadIdentity();
-          setIsEditingProfile(false);
-          setEditAlias('');
-        } else {
-          alert('Failed to save profile. Please try again.');
-        }
+        alert('Failed to save profile. Please try again.');
       }
     } catch (error) {
       console.error('Profile save failed:', error);
       alert('Failed to save profile. Please try again.');
     }
-  }, [identity, editAlias, selectedProfileImage, loadIdentity]);
+  }, [identity, editAlias, loadIdentity]);
 
   const handleCancelEdit = useCallback(() => {
     setIsEditingProfile(false);
     setEditAlias('');
-    setSelectedProfileImage(null);
   }, []);
 
   // Resize handlers
@@ -587,11 +545,8 @@ export default function App() {
   }, [isResizing]);
 
   // Onboarding
-  async function onboardingDone(alias: string, profilePicture?: string) {
+  async function onboardingDone(alias: string) {
     await apiSetAlias(alias);
-    if (profilePicture) {
-      await apiSetProfilePicture(profilePicture);
-    }
     setShowOnboarding(false);
     setShowSlideshow(false);
     loadIdentity();
@@ -1206,29 +1161,12 @@ export default function App() {
               {/* Account Avatar */}
               <div className="relative w-24 h-24 mx-auto mb-4">
                 <div className="w-24 h-24 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center overflow-hidden">
-                  {identity?.profile_picture ? (
-                    <img 
-                      src={identity.profile_picture} 
-                      alt="Profile" 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-white text-3xl font-bold">
-                      {identity?.alias ? identity.alias.charAt(0).toUpperCase() : '?'}
-                    </span>
-                  )}
+                  <img 
+                    src={getRandomProfilePicture(identity?.public_key_b64 || 'default')} 
+                    alt="Profile" 
+                    className="w-full h-full object-cover"
+                  />
                 </div>
-                {isEditingProfile && (
-                  <label className="absolute -bottom-1 -right-1 w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
-                    <Image size={16} className="text-white" />
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleProfileImageSelect}
-                      className="hidden"
-                    />
-                  </label>
-                )}
               </div>
 
               {/* Account Name */}

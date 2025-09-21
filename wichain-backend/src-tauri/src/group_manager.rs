@@ -20,7 +20,6 @@ pub struct GroupInfo {
     pub id: String,
     pub members: Vec<String>, // b64 pubkeys (sorted)
     pub name: Option<String>, // Optional group name
-    pub profile_picture: Option<String>, // Optional group profile picture
 }
 
 #[derive(Debug)]
@@ -58,11 +57,11 @@ impl GroupManager {
 
     /// Create or return existing group id for `members` with optional name.
     pub fn create_group_with_name(self: &std::sync::Arc<Self>, members: Vec<String>, name: Option<String>) -> String {
-        self.create_group_with_details(members, name, None)
+        self.create_group_with_details(members, name)
     }
 
-    /// Create or return existing group id for `members` with optional name and profile picture.
-    pub fn create_group_with_details(self: &std::sync::Arc<Self>, members: Vec<String>, name: Option<String>, profile_picture: Option<String>) -> String {
+    /// Create or return existing group id for `members` with optional name.
+    pub fn create_group_with_details(self: &std::sync::Arc<Self>, members: Vec<String>, name: Option<String>) -> String {
         let mut sorted = members;
         sorted.sort_unstable();
         let gid = Self::compute_group_id(&sorted);
@@ -71,7 +70,6 @@ impl GroupManager {
             id: gid.clone(),
             members: sorted.clone(),
             name,
-            profile_picture,
         });
         gid
     }
@@ -117,14 +115,4 @@ impl GroupManager {
         }
     }
 
-    /// Update group profile picture.
-    pub fn update_group_profile_picture(&self, gid: &str, profile_picture: Option<String>) -> bool {
-        let mut guard = self.inner.lock().unwrap();
-        if let Some(group) = guard.get_mut(gid) {
-            group.profile_picture = profile_picture;
-            true
-        } else {
-            false
-        }
-    }
 }

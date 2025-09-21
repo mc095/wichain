@@ -13,7 +13,6 @@ export interface Identity {
   alias: string;
   private_key_b64: string;
   public_key_b64: string;
-  profile_picture?: string; // Base64 encoded image data
 }
 
 export interface PeerInfo {
@@ -21,7 +20,6 @@ export interface PeerInfo {
   alias: string;
   pubkey: string;  // duplicate: same as id in our build (kept for compat)
   last_seen_ms?: number;
-  profile_picture?: string; // Base64 encoded image data
 }
 
 /**
@@ -42,7 +40,6 @@ export interface GroupInfo {
   id: string;        // stable hash (hex) from sorted members
   members: string[]; // pubkey b64 (includes self)
   name?: string;     // optional group name
-  profile_picture?: string; // optional group profile picture
 }
 
 /* ------------------------------------------------------------------ */
@@ -66,15 +63,6 @@ export async function apiSetAlias(newAlias: string): Promise<boolean> {
   }
 }
 
-export async function apiSetProfilePicture(profilePicture: string | null): Promise<boolean> {
-  try {
-    await invoke('set_profile_picture', { profile_picture: profilePicture });
-    return true;
-  } catch (err) {
-    console.error('set_profile_picture failed', err);
-    return false;
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /* Peers                                                              */
@@ -339,16 +327,6 @@ export async function apiUpdateGroupName(groupId: string, name: string | null): 
   }
 }
 
-/** Update group profile picture. */
-export async function apiUpdateGroupProfilePicture(groupId: string, profilePicture: string | null): Promise<boolean> {
-  try {
-    await invoke('update_group_profile_picture', { groupId, profilePicture });
-    return true;
-  } catch (err) {
-    console.error('update_group_profile_picture failed', err);
-    return false;
-  }
-}
 
 /** Export all messages to JSON file. */
 export async function apiExportMessagesToJson(): Promise<string> {

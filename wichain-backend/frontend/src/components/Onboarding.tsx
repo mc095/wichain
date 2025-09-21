@@ -5,51 +5,33 @@ import {
   Sparkles, 
   Shield, 
   Zap,
-  Check,
-  Image,
-  X
+  Check
 } from 'lucide-react';
 
 interface Props {
   initialAlias: string;
-  onDone: (alias: string, profilePicture?: string) => void;
+  onDone: (alias: string) => void;
 }
 
 export function Onboarding({ initialAlias, onDone }: Props) {
   const [alias, setAlias] = useState(initialAlias);
   const [isLoading, setIsLoading] = useState(false);
-  const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
 
-  const handleProfileImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setProfileImagePreview(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleRemoveProfileImage = () => {
-    setProfileImagePreview(null);
-  };
 
   const handleSubmit = async () => {
     if (!alias.trim()) return;
     setIsLoading(true);
     
     try {
-      // Save alias and profile picture to backend
-      const { apiSetAlias, apiSetProfilePicture } = await import('../lib/api');
+      // Save alias to backend
+      const { apiSetAlias } = await import('../lib/api');
       
       const aliasSuccess = await apiSetAlias(alias.trim());
-      const pictureSuccess = await apiSetProfilePicture(profileImagePreview || null);
       
-      if (aliasSuccess && pictureSuccess) {
+      if (aliasSuccess) {
         // Simulate a brief loading state for better UX
         await new Promise(resolve => setTimeout(resolve, 500));
-        onDone(alias.trim(), profileImagePreview || undefined);
+        onDone(alias.trim());
       } else {
         alert('Failed to save profile. Please try again.');
         setIsLoading(false);
@@ -200,51 +182,6 @@ export function Onboarding({ initialAlias, onDone }: Props) {
               </button>
             </motion.div>
 
-            {/* Avatar Preview */}
-            <motion.div 
-              className="mt-4 text-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1.0 }}
-            >
-              <p className="text-xs text-slate-500 mb-2">Your avatar</p>
-              <div className="relative w-12 h-12 mx-auto">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center overflow-hidden">
-                  {profileImagePreview ? (
-                    <img 
-                      src={profileImagePreview} 
-                      alt="Profile" 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <span className="text-white font-bold text-sm">
-                      {(alias || 'default').charAt(0).toUpperCase()}
-                    </span>
-                  )}
-                </div>
-                
-                {/* Profile Picture Upload Button */}
-                <label className="absolute -bottom-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
-                  <Image size={10} className="text-white" />
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleProfileImageSelect}
-                    className="hidden"
-                  />
-                </label>
-                
-                {/* Remove Profile Picture Button */}
-                {profileImagePreview && (
-                  <button
-                    onClick={handleRemoveProfileImage}
-                    className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
-                  >
-                    <X size={8} className="text-white" />
-                  </button>
-                )}
-              </div>
-            </motion.div>
           </div>
         </motion.div>
       </motion.div>

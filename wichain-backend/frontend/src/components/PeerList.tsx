@@ -4,11 +4,11 @@ import {
   Users, 
   Pin,
   Trash2,
-  Edit3,
-  Image
+  Edit3
 } from 'lucide-react';
 import type { PeerInfo, GroupInfo } from '../lib/api';
-import { apiDeletePeerMessages, apiDeleteGroup, apiUpdateGroupName, apiUpdateGroupProfilePicture } from '../lib/api';
+import { getRandomProfilePicture, getRandomGroupProfilePicture } from '../utils/profilePictures';
+import { apiDeletePeerMessages, apiDeleteGroup, apiUpdateGroupName } from '../lib/api';
 import { useState } from 'react';
 
 interface Props {
@@ -38,8 +38,6 @@ export function PeerList({
 }: Props) {
   const [editingGroup, setEditingGroup] = useState<string | null>(null);
   const [editGroupName, setEditGroupName] = useState('');
-  const [selectedGroupImage, setSelectedGroupImage] = useState<File | null>(null);
-  const [groupImagePreview, setGroupImagePreview] = useState<string | null>(null);
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
     const now = new Date();
@@ -116,61 +114,16 @@ export function PeerList({
     }
   };
 
-  const handleGroupImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      // Check file size (limit to 2MB)
-      const MAX_SIZE = 2 * 1024 * 1024; // 2MB
-      if (file.size > MAX_SIZE) {
-        alert(`Image too large! Maximum size is ${MAX_SIZE / (1024 * 1024)}MB. Your image is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`);
-        return;
-      }
-      
-      setSelectedGroupImage(file);
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setGroupImagePreview(e.target?.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
 
   const handleSaveGroup = async (groupId: string) => {
     try {
-      let profilePictureData = null;
-      
-      // If new image selected, convert to base64
-      if (selectedGroupImage) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const base64 = e.target?.result as string;
-          profilePictureData = base64;
-          
-          // Save both name and profile picture
-          Promise.all([
-            apiUpdateGroupName(groupId, editGroupName || null),
-            apiUpdateGroupProfilePicture(groupId, profilePictureData)
-          ]).then(([nameSuccess, pictureSuccess]) => {
-            if (nameSuccess && pictureSuccess) {
-              setEditingGroup(null);
-              setEditGroupName('');
-              setSelectedGroupImage(null);
-              setGroupImagePreview(null);
-            } else {
-              alert('Failed to save group. Please try again.');
-            }
-          });
-        };
-        reader.readAsDataURL(selectedGroupImage);
+      // Just save name
+      const success = await apiUpdateGroupName(groupId, editGroupName || null);
+      if (success) {
+        setEditingGroup(null);
+        setEditGroupName('');
       } else {
-        // Just save name
-        const success = await apiUpdateGroupName(groupId, editGroupName || null);
-        if (success) {
-          setEditingGroup(null);
-          setEditGroupName('');
-        } else {
-          alert('Failed to save group. Please try again.');
-        }
+        alert('Failed to save group. Please try again.');
       }
     } catch (error) {
       console.error('Group save failed:', error);
@@ -181,15 +134,11 @@ export function PeerList({
   const handleCancelGroupEdit = () => {
     setEditingGroup(null);
     setEditGroupName('');
-    setSelectedGroupImage(null);
-    setGroupImagePreview(null);
   };
 
   const startGroupEdit = (group: GroupInfo) => {
     setEditingGroup(group.id);
     setEditGroupName(group.name || '');
-    setSelectedGroupImage(null);
-    setGroupImagePreview(null);
   };
 
   return (
@@ -233,12 +182,14 @@ export function PeerList({
                   >
                     <div className="flex items-center space-x-3">
                       <div className="relative">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden ${
                           isSelected ? 'ring-2 ring-blue-500/50' : ''
                         }`}>
-                          <span className="text-white font-semibold text-sm">
-                            {peer.alias.charAt(0).toUpperCase()}
-                          </span>
+                          <img 
+                            src={getRandomProfilePicture(peer.id)} 
+                            alt="User" 
+                            className="w-full h-full object-cover"
+                          />
                         </div>
                         <div className={`absolute -bottom-1 -right-1 w-3 h-3 ${status.color} rounded-full border-2 border-slate-800`}></div>
                       </div>
@@ -329,23 +280,11 @@ export function PeerList({
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden ${
                           isSelected ? 'ring-2 ring-blue-500/50' : ''
                         }`}>
-                          {editingGroup === group.id && groupImagePreview ? (
-                            <img 
-                              src={groupImagePreview} 
-                              alt="Group Preview" 
-                              className="w-full h-full object-cover"
-                            />
-                          ) : group.profile_picture ? (
-                            <img 
-                              src={group.profile_picture} 
-                              alt="Group" 
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <span className="text-white font-semibold text-sm">
-                              {groupName.charAt(0).toUpperCase()}
-                            </span>
-                          )}
+                          <img 
+                            src={getRandomGroupProfilePicture(group.id)} 
+                            alt="Group" 
+                            className="w-full h-full object-cover"
+                          />
                         </div>
                         <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-slate-800 flex items-center justify-center">
                           <Users size={8} className="text-white" />
@@ -364,16 +303,6 @@ export function PeerList({
                               autoFocus
                             />
                             <div className="flex items-center space-x-2">
-                              <label className="flex items-center space-x-1 text-blue-400 hover:text-blue-300 cursor-pointer text-xs">
-                                <Image size={12} />
-                                <span>Change photo</span>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={handleGroupImageSelect}
-                                  className="hidden"
-                                />
-                              </label>
                               <div className="flex space-x-1">
                                 <button
                                   onClick={(e) => {

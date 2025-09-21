@@ -6,6 +6,7 @@ import {
   ArrowDown
 } from 'lucide-react';
 import type { ChatBody, GroupInfo } from '../lib/api';
+import { getRandomProfilePicture, getRandomGroupProfilePicture } from '../utils/profilePictures';
 
 interface Props {
   messages: ChatBody[];
@@ -224,23 +225,17 @@ export function ChatView({
           <div className="flex items-center space-x-4">
             <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-4 ring-white/20 overflow-hidden">
               {selectedTarget.kind === 'group' ? (
-                groups.find(g => g.id === selectedTarget.id)?.profile_picture ? (
-                  <img 
-                    src={groups.find(g => g.id === selectedTarget.id)!.profile_picture!} 
-                    alt="Group" 
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <span className="text-white font-bold text-xl">
-                    {groupDisplayName(groups.find(g => g.id === selectedTarget.id)!, aliasMap, myPubkeyB64).charAt(0).toUpperCase()}
-                  </span>
-                )
+                <img 
+                  src={getRandomGroupProfilePicture(selectedTarget.id)} 
+                  alt="Group" 
+                  className="w-full h-full object-cover"
+                />
               ) : (
-                // For peer, we need to get the peer's profile picture
-                // For now, show initial until we have peer profile pictures
-                <span className="text-white font-bold text-xl">
-                  {(aliasMap[selectedTarget.id] || selectedTarget.id).charAt(0).toUpperCase()}
-                </span>
+                <img 
+                  src={getRandomProfilePicture(selectedTarget.id)} 
+                  alt="User" 
+                  className="w-full h-full object-cover"
+                />
               )}
             </div>
             <div>
@@ -316,10 +311,11 @@ export function ChatView({
                         <div className={`flex items-end space-x-2 max-w-xs lg:max-w-md ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>
                           {!isMe && (
                             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-2 ring-slate-600/50 overflow-hidden">
-                              {/* For now, show initial until we have peer profile pictures */}
-                              <span className="text-white text-xs font-semibold">
-                                {senderName.charAt(0).toUpperCase()}
-                              </span>
+                              <img 
+                                src={getRandomProfilePicture(message.from)} 
+                                alt="User" 
+                                className="w-full h-full object-cover"
+                              />
                             </div>
                           )}
                           

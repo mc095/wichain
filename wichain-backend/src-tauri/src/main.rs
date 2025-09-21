@@ -50,7 +50,6 @@ pub struct StoredIdentity {
     pub alias: String,
     pub private_key_b64: String,
     pub public_key_b64: String,
-    pub profile_picture: Option<String>, // Base64 encoded image data
 }
 
 /// Canonical body we sign & display.
@@ -105,7 +104,6 @@ pub struct GroupCreateBody {
     pub group_id: String,
     pub members: Vec<String>,
     pub name: Option<String>,
-    pub profile_picture: Option<String>,
     pub ts_ms: u64,
 }
 
@@ -121,7 +119,7 @@ pub struct GroupCreateSigned {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupUpdateBody {
     pub group_id: String,
-    pub update_type: String, // "name" or "profile_picture"
+    pub update_type: String, // "name"
     pub value: Option<String>,
     pub ts_ms: u64,
 }
@@ -350,7 +348,6 @@ fn regenerate_identity(path: &Path) -> StoredIdentity {
         alias, 
         public_key_b64, 
         private_key_b64,
-        profile_picture: None 
     };
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
         warn!("Failed to write identity.json: {e}");
@@ -499,9 +496,6 @@ async fn handle_incoming_network_payload(
                                 "name" => {
                                     groups.update_group_name(&group_update.body.group_id, group_update.body.value);
                                 }
-                                "profile_picture" => {
-                                    groups.update_group_profile_picture(&group_update.body.group_id, group_update.body.value);
-                                }
                                 _ => {
                                     warn!("Unknown group update type: {}", group_update.body.update_type);
                                 }
@@ -561,9 +555,6 @@ async fn handle_incoming_network_payload(
                                 match group_update.body.update_type.as_str() {
                                     "name" => {
                                         groups.update_group_name(&group_update.body.group_id, group_update.body.value);
-                                    }
-                                    "profile_picture" => {
-                                        groups.update_group_profile_picture(&group_update.body.group_id, group_update.body.value);
                                     }
                                     _ => {
                                         warn!("Unknown group update type: {}", group_update.body.update_type);
@@ -643,23 +634,6 @@ async fn set_alias(state: tauri::State<'_, AppState>, new_alias: String) -> Resu
     Ok(())
 }
 
-#[tauri::command]
-async fn set_profile_picture(state: tauri::State<'_, AppState>, profile_picture: Option<String>) -> Result<(), String> {
-    {
-        let mut id = state.identity.lock().await;
-        id.profile_picture = profile_picture.clone();
-        fs::write(&state.identity_path, serde_json::to_string_pretty(&*id).unwrap())
-            .map_err(|e| format!("write identity: {e}"))?;
-    }
-
-    // Broadcast profile picture update to all peers
-    if let Err(e) = state.node.set_profile_picture(profile_picture.clone()).await {
-        warn!("Failed to broadcast profile picture update: {}", e);
-    }
-
-    let _ = state.app.emit("alias_update", ());
-    Ok(())
-}
 
 #[tauri::command]
 async fn get_peers(state: tauri::State<'_, AppState>) -> Result<Vec<PeerInfo>, String> {
@@ -744,7 +718,6 @@ async fn create_group(
         group_id: group_id.clone(),
         members: members.clone(),
         name,
-        profile_picture: None, // Profile pictures are set separately
         ts_ms: now_ms(),
     };
     let group_create_signed = GroupCreateSigned::new_signed(group_create_body, &my_sk);
@@ -1220,45 +1193,6 @@ async fn update_group_name(state: tauri::State<'_, AppState>, group_id: String, 
     }
 }
 
-/// Update group profile picture
-#[tauri::command]
-async fn update_group_profile_picture(state: tauri::State<'_, AppState>, group_id: String, profile_picture: Option<String>) -> Result<(), String> {
-    let success = state.groups.update_group_profile_picture(&group_id, profile_picture.clone());
-    if success {
-        let _ = state.app.emit("group_update", ());
-        
-        // Broadcast the update to all group members
-        if let Some(group) = state.groups.get_group(&group_id) {
-            let my_pub = state.identity.lock().await.public_key_b64.clone();
-            let my_sk = state.signing_key.lock().await.clone();
-            
-            let group_update_body = GroupUpdateBody {
-                group_id: group_id.clone(),
-                update_type: "profile_picture".to_string(),
-                value: profile_picture,
-                ts_ms: now_ms(),
-            };
-            let group_update_signed = GroupUpdateSigned::new_signed(group_update_body, &my_sk);
-            let clear_json = serde_json::to_string(&group_update_signed).unwrap();
-            
-            // Send update to all members (except self)
-            for member in group.members.iter().filter(|m| *m != &my_pub) {
-                let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, member, &clear_json)
-                    .unwrap_or_else(|e| {
-                        warn!("AES-256-GCM encryption failed for group member {}: {}, falling back to plain text", member, e);
-                        clear_json.clone()
-                    });
-                if let Err(e) = state.node.send_message(member, encrypted_b64).await {
-                    warn!("update_group_profile_picture: send_message error -> {}: {e}", member);
-                }
-            }
-        }
-        
-        Ok(())
-    } else {
-        Err("Group not found".to_string())
-    }
-}
 
 /// Export all messages to JSON file for backup/analysis
 #[tauri::command]
@@ -1497,7 +1431,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_identity,
             set_alias,
-            set_profile_picture,
             get_peers,
             add_chat_message,
             create_group,
@@ -1520,7 +1453,6 @@ fn main() {
             delete_group_messages,
             delete_group,
             update_group_name,
-            update_group_profile_picture,
             export_messages_to_json
         ])
         .run(tauri::generate_context!())
