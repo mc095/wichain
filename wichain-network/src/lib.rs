@@ -207,8 +207,9 @@ impl NetworkNode {
             let my_id = self.id.clone();
             let my_alias = self.alias.clone();
             let port = self.port;
+            let tcp_manager = self.tcp_manager.clone();
             tokio::spawn(async move {
-                recv_loop(socket, tx, peers, my_id, my_alias, port).await;
+                recv_loop(socket, tx, peers, my_id, my_alias, port, tcp_manager).await;
             });
         }
 
@@ -305,12 +306,13 @@ impl NetworkNode {
     ) -> anyhow::Result<()> {
         // First, try to establish TCP connection if we don't have one
         if !self.has_tcp_connection(peer_id).await {
+            info!("🔄 No TCP connection to {}, requesting one...", peer_id);
             // Try to request TCP connection
             if let Err(e) = self.request_tcp_connection(peer_id).await {
-                debug!("Failed to request TCP connection to {}: {}, using UDP", peer_id, e);
+                warn!("Failed to request TCP connection to {}: {}, using UDP", peer_id, e);
             } else {
                 // Wait a bit for TCP connection to be established
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
         }
 
@@ -319,11 +321,13 @@ impl NetworkNode {
             if let Ok(()) = self.send_via_tcp(peer_id, &payload_json).await {
                 info!("✅ Message sent via TCP to {}", peer_id);
                 return Ok(());
+            } else {
+                warn!("TCP connection exists but send failed, falling back to UDP");
             }
         }
 
         // Fallback to UDP
-        debug!("TCP failed, falling back to UDP for {}", peer_id);
+        info!("📡 Sending via UDP to {}", peer_id);
         self.send_direct_block(peer_id, payload_json).await
     }
 
@@ -380,6 +384,9 @@ impl NetworkNode {
             socket.send_to(&serde_json::to_vec(&request)?, peer.last_addr).await?;
             
             info!("TCP connection request sent to {} ({})", peer_id, peer.info.alias);
+            
+            // Wait a bit for the response and then try to establish TCP connection
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             
             // Try to establish TCP connection directly
             if let Some(peer_tcp_port) = peer.tcp_port {
@@ -476,8 +483,8 @@ impl TcpConnectionManager {
     /// Start TCP listener for incoming connections (static method).
     async fn start_tcp_listener_static(
         tcp_manager: Arc<TcpConnectionManager>,
-        node_id: String,
-        alias: Arc<Mutex<String>>,
+        _node_id: String,
+        _alias: Arc<Mutex<String>>,
     ) -> anyhow::Result<()> {
         let bind_addr = format!("0.0.0.0:{}", tcp_manager.tcp_port);
         let listener = TokioTcpListener::bind(&bind_addr).await?;
@@ -561,6 +568,7 @@ async fn recv_loop(
     my_id: String,
     my_alias: Arc<Mutex<String>>,
     _port: u16,
+    tcp_manager: Arc<TcpConnectionManager>,
 ) {
     let mut buf = vec![0u8; MAX_DGRAM];
     loop {
@@ -615,6 +623,31 @@ async fn recv_loop(
             NetworkMessage::TcpConnectionResponse { from, to: _to, accepted, tcp_port } => {
                 update_peer_with_tcp_port(&peers, from, from, from, src, Some(*tcp_port)).await;
                 info!("TCP connection response from {}: {} (port {})", from, if *accepted { "accepted" } else { "rejected" }, tcp_port);
+                
+                // If accepted, try to establish the TCP connection
+                if *accepted {
+                    let peer_addr = format!("{}:{}", src.ip(), tcp_port);
+                    match TokioTcpStream::connect(&peer_addr).await {
+                        Ok(stream) => {
+                            let conn = TcpConnection {
+                                stream: Arc::new(Mutex::new(stream)),
+                                peer_id: from.clone(),
+                                last_activity: Instant::now(),
+                                is_connected: true,
+                                message_count: 0,
+                                last_test_time: None,
+                            };
+                            
+                            let mut connections = tcp_manager.connections.write().await;
+                            connections.insert(from.clone(), conn);
+                            
+                            info!("✅ TCP connection established to {} on port {}", from, tcp_port);
+                        }
+                        Err(e) => {
+                            warn!("Failed to establish TCP connection to {} on port {}: {}", from, tcp_port, e);
+                        }
+                    }
+                }
             }
             NetworkMessage::TcpKeepalive { from } => {
                 update_peer(&peers, from, from, from, src).await;
