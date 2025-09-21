@@ -14,6 +14,7 @@ import {
   apiDeletePeerMessages,
   apiDeleteGroup,
   apiExportMessagesToJson,
+  apiSetProfilePicture,
   type Identity,
   type PeerInfo,
   type ChatBody,
@@ -94,7 +95,9 @@ export default function App() {
   const [showStats, setShowStats] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showAccountDialog, setShowAccountDialog] = useState(false);
-  const [messagesSent, setMessagesSent] = useState(0);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editAlias, setEditAlias] = useState('');
+  const [selectedProfileImage, setSelectedProfileImage] = useState<File | null>(null);
   const [appStartTime] = useState(Date.now());
   const [wifiName, setWifiName] = useState('Unknown');
 
@@ -379,22 +382,21 @@ export default function App() {
           // Send image data as JSON string
           const imageMessage = msg ? `${msg}\n[IMAGE_DATA:${JSON.stringify(imageData)}]` : `[IMAGE_DATA:${JSON.stringify(imageData)}]`;
           
-          if (target.kind === 'peer') {
+    if (target.kind === 'peer') {
             ok = await apiAddPeerMessage(imageMessage, target.id);
-          } else if (target.kind === 'group') {
+    } else if (target.kind === 'group') {
             ok = await apiAddGroupMessage(imageMessage, target.id);
-          }
+    }
           
-          setSending(false);
-          if (ok) {
-            setText('');
+    setSending(false);
+    if (ok) {
+      setText('');
             setSelectedImage(null);
             setImagePreview(null);
-            setMessagesSent(prev => prev + 1);
-            refreshMessages();
-          } else {
-            console.warn('Send failed (see backend log).');
-          }
+      refreshMessages();
+    } else {
+      console.warn('Send failed (see backend log).');
+    }
         } catch (error) {
           console.error('Error compressing image:', error);
           setSending(false);
@@ -415,7 +417,6 @@ export default function App() {
         setText('');
         setSelectedImage(null);
         setImagePreview(null);
-        setMessagesSent(prev => prev + 1);
         refreshMessages();
       } else {
         console.warn('Send failed (see backend log).');
@@ -488,6 +489,73 @@ export default function App() {
     }
   }, []);
 
+  // Profile editing functions
+  const handleProfileImageSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      // Check file size (limit to 2MB)
+      const MAX_SIZE = 2 * 1024 * 1024; // 2MB
+      if (file.size > MAX_SIZE) {
+        alert(`Image too large! Maximum size is ${MAX_SIZE / (1024 * 1024)}MB. Your image is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`);
+        return;
+      }
+      
+      setSelectedProfileImage(file);
+    }
+  }, []);
+
+  const handleSaveProfile = useCallback(async () => {
+    if (!identity) return;
+
+    try {
+      let profilePictureData = identity.profile_picture;
+      
+      // If new image selected, convert to base64
+      if (selectedProfileImage) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const base64 = e.target?.result as string;
+          profilePictureData = base64;
+          
+          // Save both alias and profile picture
+          Promise.all([
+            apiSetAlias(editAlias),
+            apiSetProfilePicture(profilePictureData)
+          ]).then(([aliasSuccess, pictureSuccess]) => {
+            if (aliasSuccess && pictureSuccess) {
+              loadIdentity();
+              setIsEditingProfile(false);
+              setEditAlias('');
+              setSelectedProfileImage(null);
+            } else {
+              alert('Failed to save profile. Please try again.');
+            }
+          });
+        };
+        reader.readAsDataURL(selectedProfileImage);
+      } else {
+        // Just save alias
+        const success = await apiSetAlias(editAlias);
+        if (success) {
+          loadIdentity();
+          setIsEditingProfile(false);
+          setEditAlias('');
+        } else {
+          alert('Failed to save profile. Please try again.');
+        }
+      }
+    } catch (error) {
+      console.error('Profile save failed:', error);
+      alert('Failed to save profile. Please try again.');
+    }
+  }, [identity, editAlias, selectedProfileImage, loadIdentity]);
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditingProfile(false);
+    setEditAlias('');
+    setSelectedProfileImage(null);
+  }, []);
+
   // Resize handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -533,8 +601,11 @@ export default function App() {
   }, [isResizing]);
 
   // Onboarding
-  async function onboardingDone(alias: string) {
+  async function onboardingDone(alias: string, profilePicture?: string) {
     await apiSetAlias(alias);
+    if (profilePicture) {
+      await apiSetProfilePicture(profilePicture);
+    }
     setShowOnboarding(false);
     setShowSlideshow(false);
     loadIdentity();
@@ -696,12 +767,12 @@ export default function App() {
   return (
     <div className={`flex h-screen text-white overflow-hidden mobile-scroll ${darkMode ? 'bg-gradient-to-br from-black via-slate-900 to-slate-700' : 'bg-gradient-to-br from-gray-50 to-gray-100'} ${isResizing ? 'select-none' : ''}`}>
       {/* Left Sidebar - Global Navigation */}
-      <motion.div 
+    <motion.div
         className="w-16 bg-slate-800/50 backdrop-blur-xl border-r border-slate-700/50 flex flex-col items-center py-4 space-y-4"
         initial={{ x: -100, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
-        transition={{ duration: 0.5 }}
-      >
+      transition={{ duration: 0.5 }}
+    >
         {/* Logo */}
         <motion.div 
           className="w-10 h-10 bg-gradient-to-br from-slate-600 to-slate-800 rounded-xl flex items-center justify-center text-white font-bold text-lg"
@@ -715,12 +786,11 @@ export default function App() {
         <div className="flex flex-col space-y-3">
           {[
             { icon: MessageCircle, label: "Messages", active: true, onClick: () => {} },
-            { icon: Users, label: "People", active: false, onClick: () => {} },
             { icon: Plus, label: "Create Group", active: false, onClick: () => setGroupModalOpen(true) },
             { icon: Hash, label: "Account", active: false, onClick: () => setShowAccountDialog(true) },
             { icon: BarChart3, label: "Statistics", active: false, onClick: () => setShowStats(!showStats) },
           ].map((item, index) => (
-            <motion.button
+          <motion.button
               key={item.label}
               onClick={item.onClick}
               className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
@@ -728,7 +798,7 @@ export default function App() {
                   ? 'bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-lg' 
                   : `${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200/50'}`
               }`}
-              whileHover={{ scale: 1.1 }}
+            whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.95 }}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -736,7 +806,7 @@ export default function App() {
               title={item.label}
             >
               <item.icon size={20} />
-            </motion.button>
+          </motion.button>
           ))}
         </div>
 
@@ -796,7 +866,7 @@ export default function App() {
           </div>
         )}
 
-        {sidebarOpen && (
+          {sidebarOpen && (
           <div className="h-full flex flex-col">
             {/* Header */}
             <div className="p-4 border-b border-slate-700/50">
@@ -821,18 +891,18 @@ export default function App() {
 
             {/* Chat List */}
             <div className="flex-1 overflow-y-auto">
-              <PeerList
-                peers={displayedPeers}
-                groups={groups}
-                aliasMap={aliasMap}
-                myPub={myPub}
-                selected={target}
-                onSelectPeer={(id) => {
-                  setTarget({ kind: 'peer', id });
-                }}
-                onSelectGroup={(id) => {
-                  setTarget({ kind: 'group', id });
-                }}
+            <PeerList
+              peers={displayedPeers}
+              groups={groups}
+              aliasMap={aliasMap}
+              myPub={myPub}
+              selected={target}
+              onSelectPeer={(id) => {
+                setTarget({ kind: 'peer', id });
+              }}
+              onSelectGroup={(id) => {
+                setTarget({ kind: 'group', id });
+              }}
                 messages={messages}
                 onDeletePeer={handleDeletePeer}
                 onDeleteGroup={handleDeleteGroup}
@@ -917,12 +987,12 @@ export default function App() {
 
             {/* Chat Messages */}
             <div className="flex-1 overflow-hidden">
-              <ChatView
-                messages={messages}
-                myPubkeyB64={myPub}
-                selectedTarget={target}
-                aliasMap={aliasMap}
-                groups={groups}
+          <ChatView
+            messages={messages}
+            myPubkeyB64={myPub}
+            selectedTarget={target}
+            aliasMap={aliasMap}
+            groups={groups}
                 searchQuery={searchQuery}
               />
             </div>
@@ -974,22 +1044,22 @@ export default function App() {
                   <Image size={16} />
                 </label>
                 <input
-                  type="text"
+              type="text"
                   placeholder="Write a message..."
-                  value={text}
+              value={text}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setText(e.target.value)}
                   onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  disabled={sending || !target || !identity}
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+              disabled={sending || !target || !identity}
                   className="flex-1 px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors disabled:opacity-50"
                 />
                 <button
                   className="px-4 py-3 bg-gradient-to-r from-slate-600 to-slate-800 text-white rounded-lg font-semibold hover:from-slate-700 hover:to-slate-900 disabled:opacity-50 transition-all duration-200 flex items-center space-x-2"
-                  onClick={send}
+              onClick={send}
                   disabled={sending || (!text.trim() && !selectedImage) || !target || !identity}
                 >
                   {sending ? (
@@ -999,7 +1069,7 @@ export default function App() {
                   )}
                   <span>{sending ? 'Sending...' : 'Send'}</span>
                 </button>
-              </div>
+          </div>
             </motion.div>
           </>
         ) : (
@@ -1030,9 +1100,9 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
-        {showOnboarding && identity && (
-          <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
-        )}
+      {showOnboarding && identity && (
+        <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
+      )}
       </AnimatePresence>
 
       <ResetConfirm
@@ -1116,7 +1186,7 @@ export default function App() {
                 </p>
               </div>
             </div>
-          </motion.div>
+    </motion.div>
         </motion.div>
       )}
 
@@ -1130,7 +1200,7 @@ export default function App() {
           onClick={() => setShowAccountDialog(false)}
         >
           <motion.div
-            className={`${darkMode ? 'bg-slate-800' : 'bg-white'} rounded-2xl p-6 w-full max-w-sm mx-4`}
+            className={`${darkMode ? 'bg-slate-800' : 'bg-white'} rounded-2xl p-6 w-full max-w-md mx-4`}
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
@@ -1148,19 +1218,56 @@ export default function App() {
 
             <div className="text-center">
               {/* Account Avatar */}
-              <div className="w-20 h-20 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                <span className="text-white text-2xl font-bold">
-                  {identity?.alias ? identity.alias.charAt(0).toUpperCase() : '?'}
-                </span>
+              <div className="relative w-24 h-24 mx-auto mb-4">
+                <div className="w-24 h-24 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center overflow-hidden">
+                  {identity?.profile_picture ? (
+                    <img 
+                      src={identity.profile_picture} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-white text-3xl font-bold">
+                      {identity?.alias ? identity.alias.charAt(0).toUpperCase() : '?'}
+                    </span>
+                  )}
+                </div>
+                {isEditingProfile && (
+                  <label className="absolute -bottom-1 -right-1 w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
+                    <Image size={16} className="text-white" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfileImageSelect}
+                      className="hidden"
+                    />
+                  </label>
+                )}
               </div>
 
               {/* Account Name */}
-              <h3 className={`text-2xl font-display mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                {identity?.alias || 'Unknown User'}
-              </h3>
+              {isEditingProfile ? (
+                <div className="mb-4">
+                  <input
+                    type="text"
+                    value={editAlias}
+                    onChange={(e) => setEditAlias(e.target.value)}
+                    placeholder="Enter new name"
+                    className={`w-full px-4 py-2 rounded-lg border ${
+                      darkMode 
+                        ? 'bg-slate-700 border-slate-600 text-white placeholder-slate-400' 
+                        : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                    } focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                  />
+                </div>
+              ) : (
+                <h3 className={`text-2xl font-display mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  {identity?.alias || 'Unknown User'}
+                </h3>
+              )}
 
               {/* Account Details */}
-              <div className={`p-4 rounded-lg ${darkMode ? 'bg-slate-700' : 'bg-gray-100'} space-y-2`}>
+              <div className={`p-4 rounded-lg ${darkMode ? 'bg-slate-700' : 'bg-gray-100'} space-y-2 mb-6`}>
                 <div className="flex justify-between">
                   <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>User ID:</span>
                   <span className={`text-sm font-mono ${darkMode ? 'text-slate-300' : 'text-gray-800'}`}>
@@ -1180,22 +1287,41 @@ export default function App() {
               </div>
 
               {/* Action Buttons */}
-              <div className="flex space-x-3 mt-6">
-                <button
-                  className={`flex-1 px-4 py-2 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200 hover:bg-gray-300'} transition-colors`}
-                  onClick={() => setShowAccountDialog(false)}
-                >
-                  <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Close</span>
-                </button>
-                <button
-                  className={`flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-slate-600 to-slate-800 text-white hover:from-slate-700 hover:to-slate-900 transition-all duration-200`}
-                  onClick={() => {
-                    setShowAccountDialog(false);
-                    setShowSettings(true);
-                  }}
-                >
-                  <span className="text-sm">Settings</span>
-                </button>
+              <div className="flex space-x-3">
+                {isEditingProfile ? (
+                  <>
+                    <button
+                      className={`flex-1 px-4 py-2 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200 hover:bg-gray-300'} transition-colors`}
+                      onClick={handleCancelEdit}
+                    >
+                      <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Cancel</span>
+                    </button>
+                    <button
+                      className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 transition-all duration-200"
+                      onClick={handleSaveProfile}
+                    >
+                      <span className="text-sm">Save</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className={`flex-1 px-4 py-2 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-200 hover:bg-gray-300'} transition-colors`}
+                      onClick={() => setShowAccountDialog(false)}
+                    >
+                      <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Close</span>
+                    </button>
+                    <button
+                      className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-slate-600 to-slate-800 text-white hover:from-slate-700 hover:to-slate-900 transition-all duration-200"
+                      onClick={() => {
+                        setEditAlias(identity?.alias || '');
+                        setIsEditingProfile(true);
+                      }}
+                    >
+                      <span className="text-sm">Edit Profile</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </motion.div>
@@ -1221,10 +1347,6 @@ export default function App() {
           </div>
 
           <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-slate-400 text-sm">Messages Sent:</span>
-              <span className="text-white text-sm">{messagesSent}</span>
-            </div>
             <div className="flex justify-between">
               <span className="text-slate-400 text-sm">Peers Connected:</span>
               <span className="text-white text-sm">{peers.length}</span>

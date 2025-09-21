@@ -5,17 +5,38 @@ import {
   Sparkles, 
   Shield, 
   Zap,
-  Check
+  Check,
+  Image,
+  X
 } from 'lucide-react';
 
 interface Props {
   initialAlias: string;
-  onDone: (alias: string) => void;
+  onDone: (alias: string, profilePicture?: string) => void;
 }
 
 export function Onboarding({ initialAlias, onDone }: Props) {
   const [alias, setAlias] = useState(initialAlias);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedProfileImage, setSelectedProfileImage] = useState<File | null>(null);
+  const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
+
+  const handleProfileImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedProfileImage(file);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setProfileImagePreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveProfileImage = () => {
+    setSelectedProfileImage(null);
+    setProfileImagePreview(null);
+  };
 
   const handleSubmit = async () => {
     if (!alias.trim()) return;
@@ -24,7 +45,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
     // Simulate a brief loading state for better UX
     await new Promise(resolve => setTimeout(resolve, 1000));
     
-    onDone(alias.trim());
+    onDone(alias.trim(), profileImagePreview || undefined);
   };
 
   return (
@@ -174,10 +195,41 @@ export function Onboarding({ initialAlias, onDone }: Props) {
               transition={{ delay: 1.0 }}
             >
               <p className="text-xs text-slate-500 mb-2">Your avatar</p>
-              <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto">
-                <span className="text-white font-bold text-lg">
-                  {(alias || 'default').charAt(0).toUpperCase()}
-                </span>
+              <div className="relative w-16 h-16 mx-auto">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center overflow-hidden">
+                  {profileImagePreview ? (
+                    <img 
+                      src={profileImagePreview} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-white font-bold text-lg">
+                      {(alias || 'default').charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                
+                {/* Profile Picture Upload Button */}
+                <label className="absolute -bottom-1 -right-1 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
+                  <Image size={12} className="text-white" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleProfileImageSelect}
+                    className="hidden"
+                  />
+                </label>
+                
+                {/* Remove Profile Picture Button */}
+                {profileImagePreview && (
+                  <button
+                    onClick={handleRemoveProfileImage}
+                    className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                  >
+                    <X size={10} className="text-white" />
+                  </button>
+                )}
               </div>
             </motion.div>
           </div>

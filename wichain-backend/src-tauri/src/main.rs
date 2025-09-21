@@ -51,6 +51,7 @@ pub struct StoredIdentity {
     pub alias: String,
     pub private_key_b64: String,
     pub public_key_b64: String,
+    pub profile_picture: Option<String>, // Base64 encoded image data
 }
 
 /// Canonical body we sign & display.
@@ -298,7 +299,12 @@ fn regenerate_identity(path: &Path) -> StoredIdentity {
         general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes());
     let private_key_b64 = general_purpose::STANDARD.encode(signing_key.to_bytes());
 
-    let id = StoredIdentity { alias, public_key_b64, private_key_b64 };
+    let id = StoredIdentity { 
+        alias, 
+        public_key_b64, 
+        private_key_b64,
+        profile_picture: None 
+    };
     if let Err(e) = fs::write(path, serde_json::to_string_pretty(&id).unwrap()) {
         warn!("Failed to write identity.json: {e}");
     }
@@ -527,6 +533,19 @@ async fn set_alias(state: tauri::State<'_, AppState>, new_alias: String) -> Resu
     }
 
     state.node.set_alias(alias.to_string()).await;
+    let _ = state.app.emit("alias_update", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_profile_picture(state: tauri::State<'_, AppState>, profile_picture: Option<String>) -> Result<(), String> {
+    {
+        let mut id = state.identity.lock().await;
+        id.profile_picture = profile_picture;
+        fs::write(&state.identity_path, serde_json::to_string_pretty(&*id).unwrap())
+            .map_err(|e| format!("write identity: {e}"))?;
+    }
+
     let _ = state.app.emit("alias_update", ());
     Ok(())
 }
@@ -1086,6 +1105,30 @@ async fn delete_group(state: tauri::State<'_, AppState>, group_id: String) -> Re
     Ok(())
 }
 
+/// Update group name
+#[tauri::command]
+async fn update_group_name(state: tauri::State<'_, AppState>, group_id: String, name: Option<String>) -> Result<(), String> {
+    let success = state.groups.update_group_name(&group_id, name);
+    if success {
+        let _ = state.app.emit("group_update", ());
+        Ok(())
+    } else {
+        Err("Group not found".to_string())
+    }
+}
+
+/// Update group profile picture
+#[tauri::command]
+async fn update_group_profile_picture(state: tauri::State<'_, AppState>, group_id: String, profile_picture: Option<String>) -> Result<(), String> {
+    let success = state.groups.update_group_profile_picture(&group_id, profile_picture);
+    if success {
+        let _ = state.app.emit("group_update", ());
+        Ok(())
+    } else {
+        Err("Group not found".to_string())
+    }
+}
+
 /// Export all messages to JSON file for backup/analysis
 #[tauri::command]
 async fn export_messages_to_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -1323,6 +1366,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_identity,
             set_alias,
+            set_profile_picture,
             get_peers,
             add_chat_message,
             create_group,
@@ -1345,6 +1389,8 @@ fn main() {
             delete_peer_messages,
             delete_group_messages,
             delete_group,
+            update_group_name,
+            update_group_profile_picture,
             export_messages_to_json
         ])
         .run(tauri::generate_context!())

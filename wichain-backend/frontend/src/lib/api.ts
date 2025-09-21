@@ -13,6 +13,7 @@ export interface Identity {
   alias: string;
   private_key_b64: string;
   public_key_b64: string;
+  profile_picture?: string; // Base64 encoded image data
 }
 
 export interface PeerInfo {
@@ -39,6 +40,8 @@ export interface ChatBody {
 export interface GroupInfo {
   id: string;        // stable hash (hex) from sorted members
   members: string[]; // pubkey b64 (includes self)
+  name?: string;     // optional group name
+  profile_picture?: string; // optional group profile picture
 }
 
 /* ------------------------------------------------------------------ */
@@ -58,6 +61,16 @@ export async function apiSetAlias(newAlias: string): Promise<boolean> {
     return true;
   } catch (err) {
     console.error('set_alias failed', err);
+    return false;
+  }
+}
+
+export async function apiSetProfilePicture(profilePicture: string | null): Promise<boolean> {
+  try {
+    await invoke('set_profile_picture', { profile_picture: profilePicture });
+    return true;
+  } catch (err) {
+    console.error('set_profile_picture failed', err);
     return false;
   }
 }
@@ -319,6 +332,28 @@ export async function apiDeleteGroup(groupId: string): Promise<boolean> {
     return true;
   } catch (err) {
     console.error('delete_group failed', err);
+    return false;
+  }
+}
+
+/** Update group name. */
+export async function apiUpdateGroupName(groupId: string, name: string | null): Promise<boolean> {
+  try {
+    await invoke('update_group_name', { group_id: groupId, name });
+    return true;
+  } catch (err) {
+    console.error('update_group_name failed', err);
+    return false;
+  }
+}
+
+/** Update group profile picture. */
+export async function apiUpdateGroupProfilePicture(groupId: string, profilePicture: string | null): Promise<boolean> {
+  try {
+    await invoke('update_group_profile_picture', { group_id: groupId, profile_picture: profilePicture });
+    return true;
+  } catch (err) {
+    console.error('update_group_profile_picture failed', err);
     return false;
   }
 }
