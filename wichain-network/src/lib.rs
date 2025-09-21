@@ -498,31 +498,14 @@ impl TcpConnectionManager {
                 Ok((stream, addr)) => {
                     info!("New TCP connection from {}", addr);
                     
-                    // Create a temporary peer ID for incoming connections
-                    let peer_id = format!("incoming_{}", addr.port());
-                    
-                    // Store the connection immediately
-                    let stream_arc = Arc::new(Mutex::new(stream));
-                    {
-                        let conn = TcpConnection {
-                            stream: stream_arc.clone(),
-                            peer_id: peer_id.clone(),
-                            last_activity: Instant::now(),
-                            is_connected: true,
-                            message_count: 0,
-                            last_test_time: None,
-                        };
-                        
-                        let mut connections = tcp_manager.connections.write().await;
-                        connections.insert(peer_id.clone(), conn);
-                    }
+                    let peer_id = format!("peer_{}", addr.port());
                     
                     // Start reading messages from this TCP connection
                     let tx_clone = tx.clone();
                     let tcp_manager_clone = tcp_manager.clone();
                     let peer_id_clone = peer_id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_tcp_connection_reading(stream_arc, peer_id_clone, tx_clone, tcp_manager_clone).await {
+                        if let Err(e) = Self::handle_tcp_connection_reading(stream, peer_id_clone, tx_clone, tcp_manager_clone).await {
                             error!("TCP connection reading error: {e:?}");
                         }
                     });
@@ -538,7 +521,7 @@ impl TcpConnectionManager {
 
     /// Handle reading messages from a TCP connection.
     async fn handle_tcp_connection_reading(
-        stream: Arc<Mutex<TokioTcpStream>>,
+        mut stream: TokioTcpStream,
         peer_id: String,
         tx: mpsc::Sender<NetworkMessage>,
         tcp_manager: Arc<TcpConnectionManager>,
@@ -547,12 +530,7 @@ impl TcpConnectionManager {
         let mut read_buf = vec![0u8; 4096];
         
         loop {
-            let read_result = {
-                let mut stream_guard = stream.lock().await;
-                stream_guard.read(&mut read_buf).await
-            };
-            
-            match read_result {
+            match stream.read(&mut read_buf).await {
                 Ok(0) => {
                     info!("TCP connection closed by peer {}", peer_id);
                     break;
@@ -597,12 +575,10 @@ impl TcpConnectionManager {
             }
         }
         
-        // Mark connection as disconnected but don't remove it immediately
+        // Remove connection when done
         {
             let mut connections = tcp_manager.connections.write().await;
-            if let Some(conn) = connections.get_mut(&peer_id) {
-                conn.is_connected = false;
-            }
+            connections.remove(&peer_id);
         }
         
         Ok(())
