@@ -25,8 +25,8 @@ const BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
 const PEER_STALE_SECS: u64 = 30;
 const MAX_DGRAM: usize = 8 * 1024;
 const TCP_PORT_OFFSET: u16 = 1000; // TCP port = UDP port + offset
-const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
-const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+// const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
+// const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const TCP_MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Info exposed to UI.
@@ -303,10 +303,23 @@ impl NetworkNode {
         peer_id: &str,
         payload_json: String,
     ) -> anyhow::Result<()> {
-        // Try TCP first
-        if let Ok(()) = self.send_via_tcp(peer_id, &payload_json).await {
-            debug!("Message sent via TCP to {}", peer_id);
-            return Ok(());
+        // First, try to establish TCP connection if we don't have one
+        if !self.has_tcp_connection(peer_id).await {
+            // Try to request TCP connection
+            if let Err(e) = self.request_tcp_connection(peer_id).await {
+                debug!("Failed to request TCP connection to {}: {}, using UDP", peer_id, e);
+            } else {
+                // Wait a bit for TCP connection to be established
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        // Try TCP first if we have a connection
+        if self.has_tcp_connection(peer_id).await {
+            if let Ok(()) = self.send_via_tcp(peer_id, &payload_json).await {
+                info!("✅ Message sent via TCP to {}", peer_id);
+                return Ok(());
+            }
         }
 
         // Fallback to UDP
@@ -367,6 +380,32 @@ impl NetworkNode {
             socket.send_to(&serde_json::to_vec(&request)?, peer.last_addr).await?;
             
             info!("TCP connection request sent to {} ({})", peer_id, peer.info.alias);
+            
+            // Try to establish TCP connection directly
+            if let Some(peer_tcp_port) = peer.tcp_port {
+                let peer_addr = format!("{}:{}", peer.last_addr.ip(), peer_tcp_port);
+                match TokioTcpStream::connect(&peer_addr).await {
+                    Ok(stream) => {
+                        let conn = TcpConnection {
+                            stream: Arc::new(Mutex::new(stream)),
+                            peer_id: peer_id.to_string(),
+                            last_activity: Instant::now(),
+                            is_connected: true,
+                            message_count: 0,
+                            last_test_time: None,
+                        };
+                        
+                        let mut connections = self.tcp_manager.connections.write().await;
+                        connections.insert(peer_id.to_string(), conn);
+                        
+                        info!("✅ TCP connection established to {} ({})", peer_id, peer.info.alias);
+                    }
+                    Err(e) => {
+                        warn!("Failed to establish TCP connection to {}: {}", peer_id, e);
+                    }
+                }
+            }
+            
             Ok(())
         } else {
             Err(anyhow::anyhow!("Peer not found: {}", peer_id))
@@ -437,8 +476,8 @@ impl TcpConnectionManager {
     /// Start TCP listener for incoming connections (static method).
     async fn start_tcp_listener_static(
         tcp_manager: Arc<TcpConnectionManager>,
-        _node_id: String,
-        _alias: Arc<Mutex<String>>,
+        node_id: String,
+        alias: Arc<Mutex<String>>,
     ) -> anyhow::Result<()> {
         let bind_addr = format!("0.0.0.0:{}", tcp_manager.tcp_port);
         let listener = TokioTcpListener::bind(&bind_addr).await?;
@@ -447,10 +486,26 @@ impl TcpConnectionManager {
         // Start accepting connections
         loop {
             match listener.accept().await {
-                Ok((_stream, addr)) => {
+                Ok((stream, addr)) => {
                     info!("New TCP connection from {}", addr);
-                    // For now, we'll just log the connection
-                    // In a full implementation, we'd need to identify the peer and store the connection
+                    
+                    // Create a connection entry
+                    let conn = TcpConnection {
+                        stream: Arc::new(Mutex::new(stream)),
+                        peer_id: format!("peer_{}", addr.port()), // Temporary ID based on port
+                        last_activity: Instant::now(),
+                        is_connected: true,
+                        message_count: 0,
+                        last_test_time: None,
+                    };
+                    
+                    // Add to connections
+                    {
+                        let mut connections = tcp_manager.connections.write().await;
+                        connections.insert(conn.peer_id.clone(), conn);
+                    }
+                    
+                    info!("✅ TCP connection established with peer from {}", addr);
                 }
                 Err(e) => {
                     error!("TCP accept error: {e:?}");
@@ -541,8 +596,21 @@ async fn recv_loop(
             }
             NetworkMessage::TcpConnectionRequest { from, from_alias, tcp_port } => {
                 update_peer_with_tcp_port(&peers, from, from_alias, from, src, Some(*tcp_port)).await;
-                // TODO: Handle TCP connection request (accept/reject logic)
                 info!("TCP connection request from {} ({}) on port {}", from, from_alias, tcp_port);
+                
+                // Accept the TCP connection request by sending a response
+                let response = NetworkMessage::TcpConnectionResponse {
+                    from: my_id.clone(),
+                    to: from.clone(),
+                    accepted: true,
+                    tcp_port: 60000 + TCP_PORT_OFFSET, // Our TCP port (60000 + 1000 = 61000)
+                };
+                
+                let bind_addr = "0.0.0.0:0";
+                if let Ok(socket) = UdpSocket::bind(bind_addr).await {
+                    let _ = socket.send_to(&serde_json::to_vec(&response).unwrap(), src).await;
+                    info!("✅ TCP connection response sent to {}", from);
+                }
             }
             NetworkMessage::TcpConnectionResponse { from, to: _to, accepted, tcp_port } => {
                 update_peer_with_tcp_port(&peers, from, from, from, src, Some(*tcp_port)).await;
