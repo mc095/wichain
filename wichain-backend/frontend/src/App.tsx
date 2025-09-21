@@ -35,12 +35,7 @@ import {
   BarChart3,
   Power,
   Image,
-  Paperclip,
   Menu,
-  Phone,
-  Video,
-  Pin,
-  MoreVertical,
   Lock
 } from 'lucide-react';
 
