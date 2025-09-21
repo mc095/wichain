@@ -21,6 +21,7 @@ export interface PeerInfo {
   alias: string;
   pubkey: string;  // duplicate: same as id in our build (kept for compat)
   last_seen_ms?: number;
+  profile_picture?: string; // Base64 encoded image data
 }
 
 /**

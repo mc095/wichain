@@ -38,6 +38,7 @@ pub struct PeerInfo {
     pub last_seen_ms: u64,
     pub connection_type: String, // "UDP", "TCP", or "Unknown"
     pub tcp_port: Option<u16>,
+    pub profile_picture: Option<String>, // Base64 encoded image data
 }
 
 /// Connection statistics for monitoring.
@@ -54,7 +55,7 @@ pub struct ConnectionStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum NetworkMessage {
-    Peer { id: String, alias: String, pubkey: String },
+    Peer { id: String, alias: String, pubkey: String, profile_picture: Option<String> },
     Ping { id: String, alias: String },
     Pong { id: String, alias: String },
 
@@ -181,6 +182,13 @@ impl NetworkNode {
         }
     }
 
+    /// Update profile picture hot (called by backend on profile picture change).
+    pub async fn set_profile_picture(&self, profile_picture: Option<String>) -> anyhow::Result<()> {
+        // Store profile picture in the node (we'll need to add this field)
+        // For now, we'll pass it to ping_now_with_profile
+        self.ping_now_with_profile(profile_picture).await
+    }
+
     /// Start receiver + periodic broadcaster + TCP listener.
     pub async fn start(&self, tx: mpsc::Sender<NetworkMessage>) {
         // Try primary binding first
@@ -280,6 +288,11 @@ impl NetworkNode {
 
     /// Force an immediate announce + ping (used by Find Peers button).
     pub async fn ping_now(&self) -> anyhow::Result<()> {
+        self.ping_now_with_profile(None).await
+    }
+
+    /// Force an immediate announce + ping with profile picture (used when profile picture changes).
+    pub async fn ping_now_with_profile(&self, profile_picture: Option<String>) -> anyhow::Result<()> {
         let bind_addr = "0.0.0.0:0";
         let socket = UdpSocket::bind(bind_addr).await?;
         socket.set_broadcast(true)?;
@@ -291,6 +304,7 @@ impl NetworkNode {
             id: self.id.clone(),
             alias: alias_now.clone(),
             pubkey: self.pubkey.clone(),
+            profile_picture,
         };
         socket
             .send_to(&serde_json::to_vec(&announce)?, broadcast_addr)
@@ -724,8 +738,8 @@ async fn recv_loop(
         };
 
         match &msg {
-            NetworkMessage::Peer { id, alias, pubkey } => {
-                update_peer(&peers, id, alias, pubkey, src).await;
+            NetworkMessage::Peer { id, alias, pubkey, profile_picture } => {
+                update_peer_with_profile(&peers, id, alias, pubkey, src, profile_picture.clone()).await;
             }
             NetworkMessage::Ping { id, alias } => {
                 update_peer(&peers, id, alias, id, src).await;
@@ -842,6 +856,40 @@ async fn update_peer(
     update_peer_with_tcp_port(peers, id, alias, pubkey, addr, None).await;
 }
 
+async fn update_peer_with_profile(
+    peers: &Arc<Mutex<HashMap<String, PeerEntry>>>,
+    id: &str,
+    alias: &str,
+    pubkey: &str,
+    addr: SocketAddr,
+    profile_picture: Option<String>,
+) {
+    let mut map = peers.lock().await;
+    let now = Instant::now();
+    let entry = map.entry(id.to_string()).or_insert_with(|| PeerEntry {
+        info: PeerInfo {
+            id: id.to_string(),
+            alias: alias.to_string(),
+            pubkey: pubkey.to_string(),
+            last_seen_ms: 0,
+            connection_type: "UDP".to_string(),
+            tcp_port: None,
+            profile_picture: None,
+        },
+        last_seen: now,
+        last_addr: addr,
+        tcp_port: None,
+    });
+    entry.info.alias = alias.to_string();
+    entry.info.pubkey = pubkey.to_string();
+    entry.last_seen = now;
+    entry.last_addr = addr;
+    entry.info.last_seen_ms = 0;
+    if let Some(profile) = profile_picture {
+        entry.info.profile_picture = Some(profile);
+    }
+}
+
 async fn update_peer_with_tcp_port(
     peers: &Arc<Mutex<HashMap<String, PeerEntry>>>,
     id: &str,
@@ -860,6 +908,7 @@ async fn update_peer_with_tcp_port(
             last_seen_ms: 0,
             connection_type: "UDP".to_string(),
             tcp_port: None,
+            profile_picture: None,
         },
         last_seen: now,
         last_addr: addr,
@@ -903,6 +952,7 @@ async fn periodic_broadcast(
             id: id.clone(),
             alias: alias_now.clone(),
             pubkey: pubkey.clone(),
+            profile_picture: None, // Profile pictures will be added later
         };
         let _ = send_to(&socket, &announce, broadcast_addr).await;
 

@@ -59,7 +59,7 @@ export function PeerList({
     );
     
     if (peerMessages.length === 0) {
-      return "No messages yet";
+      return "Text now!";
     }
     
     // Sort by timestamp and get the latest
@@ -273,7 +273,7 @@ export function PeerList({
                           <span className="text-slate-500 text-xs">
                             {(() => {
                               const lastMsgTime = getLastMessageTime(peer.id);
-                              return lastMsgTime ? formatTime(lastMsgTime) : 'No messages';
+                              return lastMsgTime ? formatTime(lastMsgTime) : 'Text now!';
                             })()}
                           </span>
                         </div>

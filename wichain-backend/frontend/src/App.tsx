@@ -1361,6 +1361,12 @@ function groupDisplayName(
   aliasMap: Record<string, string>,
   myPub: string,
 ): string {
+  // If group has a name, use it
+  if (g.name && g.name.trim()) {
+    return g.name;
+  }
+  
+  // Otherwise, generate name from members
   const names = g.members
     .filter((m) => m !== myPub)
     .map((m) => aliasMap[m] ?? m.slice(0, 8) + '…');

@@ -647,9 +647,14 @@ async fn set_alias(state: tauri::State<'_, AppState>, new_alias: String) -> Resu
 async fn set_profile_picture(state: tauri::State<'_, AppState>, profile_picture: Option<String>) -> Result<(), String> {
     {
         let mut id = state.identity.lock().await;
-        id.profile_picture = profile_picture;
+        id.profile_picture = profile_picture.clone();
         fs::write(&state.identity_path, serde_json::to_string_pretty(&*id).unwrap())
             .map_err(|e| format!("write identity: {e}"))?;
+    }
+
+    // Broadcast profile picture update to all peers
+    if let Err(e) = state.node.set_profile_picture(profile_picture.clone()).await {
+        warn!("Failed to broadcast profile picture update: {}", e);
     }
 
     let _ = state.app.emit("alias_update", ());

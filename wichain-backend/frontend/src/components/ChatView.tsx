@@ -222,13 +222,26 @@ export function ChatView({
         {/* Content */}
         <div className="relative z-10 p-6 h-full flex items-end">
           <div className="flex items-center space-x-4">
-            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-4 ring-white/20">
-              <span className="text-white font-bold text-xl">
-                {selectedTarget.kind === 'group' 
-                  ? groupDisplayName(groups.find(g => g.id === selectedTarget.id)!, aliasMap, myPubkeyB64).charAt(0).toUpperCase()
-                  : (aliasMap[selectedTarget.id] || selectedTarget.id).charAt(0).toUpperCase()
-                }
-              </span>
+            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-4 ring-white/20 overflow-hidden">
+              {selectedTarget.kind === 'group' ? (
+                groups.find(g => g.id === selectedTarget.id)?.profile_picture ? (
+                  <img 
+                    src={groups.find(g => g.id === selectedTarget.id)!.profile_picture!} 
+                    alt="Group" 
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-white font-bold text-xl">
+                    {groupDisplayName(groups.find(g => g.id === selectedTarget.id)!, aliasMap, myPubkeyB64).charAt(0).toUpperCase()}
+                  </span>
+                )
+              ) : (
+                // For peer, we need to get the peer's profile picture
+                // For now, show initial until we have peer profile pictures
+                <span className="text-white font-bold text-xl">
+                  {(aliasMap[selectedTarget.id] || selectedTarget.id).charAt(0).toUpperCase()}
+                </span>
+              )}
             </div>
             <div>
               <h2 className="text-2xl font-bold text-white">
@@ -302,7 +315,8 @@ export function ChatView({
                       >
                         <div className={`flex items-end space-x-2 max-w-xs lg:max-w-md ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>
                           {!isMe && (
-                            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-2 ring-slate-600/50">
+                            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-2 ring-slate-600/50 overflow-hidden">
+                              {/* For now, show initial until we have peer profile pictures */}
                               <span className="text-white text-xs font-semibold">
                                 {senderName.charAt(0).toUpperCase()}
                               </span>
@@ -409,7 +423,7 @@ export function ChatView({
               <div className="w-16 h-16 bg-slate-700/50 rounded-full flex items-center justify-center mx-auto mb-4">
                 <User size={24} className="text-slate-400" />
               </div>
-              <h3 className="text-slate-400 font-medium mb-2">No messages yet</h3>
+              <h3 className="text-slate-400 font-medium mb-2">Text now!</h3>
               <p className="text-slate-500 text-sm">Start the conversation by sending a message</p>
             </motion.div>
           )}
@@ -442,6 +456,12 @@ function groupDisplayName(
   aliasMap: Record<string, string>,
   myPub: string,
 ): string {
+  // If group has a name, use it
+  if (g.name && g.name.trim()) {
+    return g.name;
+  }
+  
+  // Otherwise, generate name from members
   const names = g.members
     .filter((m) => m !== myPub)
     .map((m) => aliasMap[m] ?? m.slice(0, 8) + '…');
