@@ -2,10 +2,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   MessageCircle, 
   Users, 
-  MoreVertical,
   Pin,
   Trash2,
-  X,
   Edit3,
   Image
 } from 'lucide-react';

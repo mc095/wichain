@@ -18,13 +18,11 @@ interface Props {
 export function Onboarding({ initialAlias, onDone }: Props) {
   const [alias, setAlias] = useState(initialAlias);
   const [isLoading, setIsLoading] = useState(false);
-  const [selectedProfileImage, setSelectedProfileImage] = useState<File | null>(null);
   const [profileImagePreview, setProfileImagePreview] = useState<string | null>(null);
 
   const handleProfileImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setSelectedProfileImage(file);
       const reader = new FileReader();
       reader.onload = (e) => {
         setProfileImagePreview(e.target?.result as string);
@@ -34,7 +32,6 @@ export function Onboarding({ initialAlias, onDone }: Props) {
   };
 
   const handleRemoveProfileImage = () => {
-    setSelectedProfileImage(null);
     setProfileImagePreview(null);
   };
 
