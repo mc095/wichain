@@ -595,6 +595,26 @@ async fn add_chat_message(
         chain.add_text_block(encrypted_json);
         chain.save_to_file(&state.blockchain_path).ok();
     }
+    
+    // Save to MongoDB
+    {
+        let mongodb_guard = state.mongodb.lock().await;
+        if let Some(storage) = mongodb_guard.as_ref() {
+            let mongo_message = blockchain_to_mongo_message(
+                chat_signed.body.from.clone(),
+                chat_signed.body.to.clone().unwrap_or_default(),
+                chat_signed.body.text.clone(),
+                chat_signed.body.ts_ms,
+                chat_signed.sig_b64.clone(),
+                true, // encrypted
+            );
+            
+            if let Err(e) = storage.save_message(mongo_message).await {
+                warn!("Failed to save message to MongoDB: {e}");
+            }
+        }
+    }
+    
     let _ = state.app.emit("chat_update", ());
 
     // encrypt + send (try TCP first, fallback to UDP)
@@ -720,7 +740,7 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
     // Try to get messages from MongoDB first
     let mongodb_guard = state.mongodb.lock().await;
     if let Some(storage) = mongodb_guard.as_ref() {
-        match storage.get_chat_history(&my_pub, "", Some(1000)).await {
+        match storage.get_all_messages_for_user(&my_pub, Some(1000)).await {
             Ok(mongo_messages) => {
                 let mut out = Vec::new();
                 for mongo_msg in mongo_messages {
@@ -735,7 +755,7 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
                 return Ok(out);
             }
             Err(e) => {
-                warn!("Failed to get chat history from MongoDB: {e}, falling back to blockchain");
+                warn!("Failed to get messages from MongoDB: {e}, falling back to blockchain");
             }
         }
     }

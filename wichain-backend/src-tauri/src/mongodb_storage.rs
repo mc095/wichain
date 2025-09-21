@@ -85,6 +85,26 @@ impl MongoStorage {
         Ok(messages?)
     }
     
+    /// Get all messages for a user (sent or received)
+    pub async fn get_all_messages_for_user(&self, user_id: &str, limit: Option<i64>) -> Result<Vec<ChatMessage>> {
+        let filter = doc! {
+            "$or": [
+                { "from": user_id },
+                { "to": user_id }
+            ]
+        };
+        
+        let mut options = mongodb::options::FindOptions::default();
+        options.sort = Some(doc! { "timestamp": 1 });
+        if let Some(limit) = limit {
+            options.limit = Some(limit);
+        }
+        
+        let cursor = self.messages_collection.find(filter, options).await?;
+        let messages: Result<Vec<_>> = cursor.try_collect().await.map_err(|e| e.into());
+        Ok(messages?)
+    }
+    
     /// Clear all messages from the database
     pub async fn clear_all_messages(&self) -> Result<()> {
         self.messages_collection.delete_many(doc! {}, None).await?;
