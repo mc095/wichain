@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
-import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
 const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
@@ -18,6 +19,7 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG
   },
   plugins: [
+    react(),
     tailwindcss(),
   ]
 });

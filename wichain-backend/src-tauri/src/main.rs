@@ -19,6 +19,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    process::Command,
 };
 
 use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, generic_array::GenericArray}};
@@ -756,6 +757,46 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Get the current connected WiFi network name using PowerShell
+#[tauri::command]
+async fn get_wifi_name() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("powershell")
+            .args(&["-Command", "(Get-NetConnectionProfile).Name"])
+            .output()
+            .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
+
+        if output.status.success() {
+            let wifi_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if wifi_name.is_empty() {
+                Ok("No WiFi Connected".to_string())
+            } else {
+                Ok(wifi_name)
+            }
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr);
+            Err(format!("PowerShell command failed: {}", error))
+        }
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        // For non-Windows systems, try to get WiFi name using system commands
+        let output = Command::new("sh")
+            .args(&["-c", "iwgetid -r 2>/dev/null || echo 'No WiFi Connected'"])
+            .output()
+            .map_err(|e| format!("Failed to execute system command: {}", e))?;
+
+        if output.status.success() {
+            let wifi_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            Ok(wifi_name)
+        } else {
+            Ok("Unknown".to_string())
+        }
+    }
+}
+
 /// Diagnostic command to test network connectivity
 #[tauri::command]
 async fn test_network_connectivity(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -1142,6 +1183,7 @@ fn main() {
             add_group_message,
             get_chat_history,
             reset_data,
+            get_wifi_name,
             test_network_connectivity,
             request_tcp_connection,
             has_tcp_connection,

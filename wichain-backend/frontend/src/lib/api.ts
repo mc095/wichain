@@ -190,6 +190,16 @@ export async function apiTestNetwork(): Promise<string> {
   }
 }
 
+/** Get the current connected WiFi network name. */
+export async function apiGetWifiName(): Promise<string> {
+  try {
+    return await invoke<string>('get_wifi_name');
+  } catch (err) {
+    console.error('get_wifi_name failed', err);
+    return 'Unknown';
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* TCP Connection Management                                          */
 /* ------------------------------------------------------------------ */

@@ -4,16 +4,13 @@
 use std::time::Duration;
 use tokio::time::sleep;
 use wichain_network::{NetworkNode, NetworkMessage};
-use serde_json;
 
 // Import the encryption functions from main.rs
 use crate::{
     encrypt_json_aes256gcm, 
     decrypt_json_aes256gcm,
     encrypt_for_storage,
-    decrypt_from_storage,
-    ChatBody,
-    ChatSigned
+    decrypt_from_storage
 };
 
 /// Test AES-256-GCM encryption and decryption

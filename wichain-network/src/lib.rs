@@ -120,20 +120,23 @@ struct PeerEntry {
 
     /// TCP connection state for a peer.
     #[derive(Debug)]
-    struct TcpConnection {
-        stream: Arc<Mutex<TokioTcpStream>>,
-        peer_id: String,
-        last_activity: Instant,
-        is_connected: bool,
-        message_count: u64,
-        last_test_time: Option<Instant>,
-        handshake_completed: bool,
-    }
+struct TcpConnection {
+    stream: Arc<Mutex<TokioTcpStream>>,
+    #[allow(dead_code)]
+    peer_id: String,
+    last_activity: Instant,
+    is_connected: bool,
+    message_count: u64,
+    last_test_time: Option<Instant>,
+    #[allow(dead_code)]
+    handshake_completed: bool,
+}
 
 /// TCP connection manager.
 #[derive(Debug)]
 struct TcpConnectionManager {
     connections: Arc<RwLock<HashMap<String, TcpConnection>>>,
+    #[allow(dead_code)]
     tcp_listener: Option<TokioTcpListener>,
     tcp_port: u16,
 }
@@ -654,6 +657,7 @@ impl TcpConnectionManager {
     }
 
     /// Handle incoming TCP connection.
+    #[allow(dead_code)]
     async fn handle_incoming_tcp_connection(
         &self,
         stream: TokioTcpStream,
@@ -680,6 +684,7 @@ impl TcpConnectionManager {
     }
 
     /// Clean up stale TCP connections.
+    #[allow(dead_code)]
     async fn cleanup_stale_connections(&self) {
         let mut connections = self.connections.write().await;
         let now = Instant::now();
@@ -809,7 +814,7 @@ async fn recv_loop(
                 update_peer(&peers, from, from, from, src).await;
                 info!("TCP connection test received from {}", from);
             }
-            NetworkMessage::TcpConnectionTestResponse { from, to, timestamp, response_time_ms } => {
+            NetworkMessage::TcpConnectionTestResponse { from, to, timestamp: _, response_time_ms } => {
                 update_peer(&peers, from, from, from, src).await;
                 info!("TCP connection test response from {} to {}: {}ms", from, to, response_time_ms);
             }
