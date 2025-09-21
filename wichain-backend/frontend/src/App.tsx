@@ -601,11 +601,11 @@ export default function App() {
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const openGroupModal = () => setGroupModalOpen(true);
   const closeGroupModal = () => setGroupModalOpen(false);
-  const createGroup = async (memberIds: string[]) => {
+  const createGroup = async (memberIds: string[], groupName?: string) => {
     const myPub = identity?.public_key_b64;
     if (!myPub) return;
     const full = Array.from(new Set([myPub, ...memberIds]));
-    const gid = await apiCreateGroup(full);
+    const gid = await apiCreateGroup(full, groupName);
     if (gid) {
       await refreshGroups();
       setTarget({ kind: 'group', id: gid });
@@ -926,7 +926,7 @@ export default function App() {
                 <div>
                   <h3 className="text-white font-semibold">{targetLabel}</h3>
                   <p className="text-xs text-slate-400">
-                    {target.kind === 'group' ? `${groups.find(g => g.id === target.id)?.members.length || 0} members` : 'Online'}
+                    {target.kind === 'group' ? `${groups.find(g => g.id === target.id)?.members.length || 0} members` : ''}
                   </p>
                 </div>
               </div>
@@ -1262,7 +1262,7 @@ export default function App() {
                 </div>
                 <div className="flex justify-between">
                   <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Status:</span>
-                  <span className="text-sm text-green-400">Online</span>
+                  <span className="text-sm text-green-400"></span>
                 </div>
                 <div className="flex justify-between">
                   <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Joined:</span>

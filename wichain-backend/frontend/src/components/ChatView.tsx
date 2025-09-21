@@ -240,7 +240,7 @@ export function ChatView({
               <p className="text-blue-100">
                 {selectedTarget.kind === 'group' 
                   ? `${groups.find(g => g.id === selectedTarget.id)?.members.length || 0} members`
-                  : 'Online'
+                  : ''
                 }
               </p>
             </div>

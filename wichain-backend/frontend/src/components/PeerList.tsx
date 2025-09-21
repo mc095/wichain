@@ -91,7 +91,7 @@ export function PeerList({
 
   const getConnectionStatus = (_peer: PeerInfo) => {
     // For now, assume all peers are online
-    return { color: 'bg-green-500', text: 'Online' };
+    return { color: 'bg-green-500', text: '' };
   };
 
   const handleDeletePeer = async (peerId: string, peerAlias: string) => {

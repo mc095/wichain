@@ -14,7 +14,7 @@ interface Props {
   onClose: () => void;
   peers: PeerInfo[];
   aliasMap: Record<string, string>;
-  onCreateGroup: (memberIds: string[]) => void;
+  onCreateGroup: (memberIds: string[], groupName?: string) => void;
 }
 
 export function GroupModal({ open, onClose, peers, onCreateGroup }: Props) {
@@ -40,7 +40,7 @@ export function GroupModal({ open, onClose, peers, onCreateGroup }: Props) {
     
     setIsCreating(true);
     try {
-      await onCreateGroup(selectedPeers);
+      await onCreateGroup(selectedPeers, groupName.trim() || undefined);
       setSelectedPeers([]);
       setGroupName('');
       setSearchQuery('');
@@ -258,7 +258,6 @@ export function GroupModal({ open, onClose, peers, onCreateGroup }: Props) {
                         </div>
                         
                         <span className="px-2 py-1 rounded-full text-xs bg-slate-500/20 text-slate-300">
-                          Online
                         </span>
                       </motion.div>
                     ))

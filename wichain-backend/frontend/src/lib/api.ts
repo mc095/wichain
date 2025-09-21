@@ -97,9 +97,9 @@ export async function apiGetPeers(): Promise<PeerInfo[]> {
  * Create (or get existing) group. Backend expects *all* members, including self.
  * Returns the computed group_id (hex string).
  */
-export async function apiCreateGroup(members: string[]): Promise<string | null> {
+export async function apiCreateGroup(members: string[], name?: string): Promise<string | null> {
   try {
-    const id = await invoke<string>('create_group', { members });
+    const id = await invoke<string>('create_group', { members, name });
     return id;
   } catch (err) {
     console.error('create_group failed', err);

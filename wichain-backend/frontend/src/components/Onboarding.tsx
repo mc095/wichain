@@ -39,10 +39,26 @@ export function Onboarding({ initialAlias, onDone }: Props) {
     if (!alias.trim()) return;
     setIsLoading(true);
     
-    // Simulate a brief loading state for better UX
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    onDone(alias.trim(), profileImagePreview || undefined);
+    try {
+      // Save alias and profile picture to backend
+      const { apiSetAlias, apiSetProfilePicture } = await import('../lib/api');
+      
+      const aliasSuccess = await apiSetAlias(alias.trim());
+      const pictureSuccess = await apiSetProfilePicture(profileImagePreview || null);
+      
+      if (aliasSuccess && pictureSuccess) {
+        // Simulate a brief loading state for better UX
+        await new Promise(resolve => setTimeout(resolve, 500));
+        onDone(alias.trim(), profileImagePreview || undefined);
+      } else {
+        alert('Failed to save profile. Please try again.');
+        setIsLoading(false);
+      }
+    } catch (error) {
+      console.error('Profile save failed:', error);
+      alert('Failed to save profile. Please try again.');
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -55,7 +71,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
         transition={{ duration: 0.3 }}
       >
         <motion.div
-          className="w-full max-w-md"
+          className="w-full max-w-sm"
           initial={{ scale: 0.8, opacity: 0, y: 50 }}
           animate={{ scale: 1, opacity: 1, y: 0 }}
           exit={{ scale: 0.8, opacity: 0, y: 50 }}
@@ -66,16 +82,16 @@ export function Onboarding({ initialAlias, onDone }: Props) {
             duration: 0.5 
           }}
         >
-          <div className="bg-slate-800/90 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-8">
+          <div className="bg-slate-800/90 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6">
             {/* Header with animated icon */}
             <motion.div 
-              className="text-center mb-8"
+              className="text-center mb-6"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
             >
               <motion.div
-                className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4"
+                className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-3"
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ 
@@ -85,11 +101,11 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                   delay: 0.3 
                 }}
               >
-                <User size={32} className="text-white" />
+                <User size={24} className="text-white" />
               </motion.div>
               
               <motion.h2 
-                className="text-2xl font-display text-white mb-2"
+                className="text-xl font-display text-white mb-2"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.4 }}
@@ -98,7 +114,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
               </motion.h2>
               
               <motion.p 
-                className="text-slate-400"
+                className="text-slate-400 text-sm"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.5 }}
@@ -109,7 +125,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
 
             {/* Features */}
             <motion.div 
-              className="space-y-3 mb-8"
+              className="space-y-2 mb-6"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.6 }}
@@ -121,22 +137,22 @@ export function Onboarding({ initialAlias, onDone }: Props) {
               ].map((feature, index) => (
                 <motion.div 
                   key={feature.text}
-                  className="flex items-center space-x-3 text-slate-300"
+                  className="flex items-center space-x-2 text-slate-300"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.7 + index * 0.1 }}
                 >
-                  <div className="w-8 h-8 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                    <feature.icon size={16} className="text-blue-400" />
+                  <div className="w-6 h-6 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                    <feature.icon size={12} className="text-blue-400" />
                   </div>
-                  <span className="text-sm">{feature.text}</span>
+                  <span className="text-xs">{feature.text}</span>
                 </motion.div>
               ))}
             </motion.div>
 
             {/* Input */}
             <motion.div 
-              className="mb-6"
+              className="mb-4"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.8 }}
@@ -155,7 +171,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                   }
                 }}
                 autoFocus
-                  className="w-full px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors"
+                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors text-sm"
               />
             </motion.div>
 
@@ -166,7 +182,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
               transition={{ delay: 0.9 }}
             >
               <button
-                className="w-full px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 transition-all duration-200 flex items-center justify-center space-x-2"
+                className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 transition-all duration-200 flex items-center justify-center space-x-2 text-sm"
                 onClick={handleSubmit}
                 disabled={!alias.trim() || isLoading}
               >
@@ -177,7 +193,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                   </>
                 ) : (
                   <>
-                    <Check size={16} />
+                    <Check size={14} />
                     <span>Continue</span>
                   </>
                 )}
@@ -186,14 +202,14 @@ export function Onboarding({ initialAlias, onDone }: Props) {
 
             {/* Avatar Preview */}
             <motion.div 
-              className="mt-6 text-center"
+              className="mt-4 text-center"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 1.0 }}
             >
               <p className="text-xs text-slate-500 mb-2">Your avatar</p>
-              <div className="relative w-16 h-16 mx-auto">
-                <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center overflow-hidden">
+              <div className="relative w-12 h-12 mx-auto">
+                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center overflow-hidden">
                   {profileImagePreview ? (
                     <img 
                       src={profileImagePreview} 
@@ -201,15 +217,15 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <span className="text-white font-bold text-lg">
+                    <span className="text-white font-bold text-sm">
                       {(alias || 'default').charAt(0).toUpperCase()}
                     </span>
                   )}
                 </div>
                 
                 {/* Profile Picture Upload Button */}
-                <label className="absolute -bottom-1 -right-1 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
-                  <Image size={12} className="text-white" />
+                <label className="absolute -bottom-1 -right-1 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors">
+                  <Image size={10} className="text-white" />
                   <input
                     type="file"
                     accept="image/*"
@@ -222,9 +238,9 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                 {profileImagePreview && (
                   <button
                     onClick={handleRemoveProfileImage}
-                    className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                    className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
                   >
-                    <X size={10} className="text-white" />
+                    <X size={8} className="text-white" />
                   </button>
                 )}
               </div>

@@ -608,6 +608,7 @@ async fn add_chat_message(
 async fn create_group(
     state: tauri::State<'_, AppState>,
     members: Vec<String>,
+    name: Option<String>,
 ) -> Result<String, String> {
     if members.is_empty() {
         return Err("group needs at least 1 member".into());
@@ -622,8 +623,8 @@ async fn create_group(
         members.push(my_pub.clone());
     }
 
-    // Create group locally
-    let group_id = state.groups.create_group(members.clone());
+    // Create group locally with name
+    let group_id = state.groups.create_group_with_name(members.clone(), name);
     let _ = state.app.emit("group_update", ()); // Notify frontend
 
     // Prepare signed group creation message
