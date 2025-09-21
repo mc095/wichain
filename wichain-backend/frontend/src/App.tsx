@@ -10,7 +10,6 @@ import {
   apiResetData,
   apiCreateGroup,
   apiListGroups,
-  apiGetWifiName,
   apiDeletePeerMessages,
   apiDeleteGroup,
   apiExportMessagesToJson,
@@ -99,7 +98,6 @@ export default function App() {
   const [editAlias, setEditAlias] = useState('');
   const [selectedProfileImage, setSelectedProfileImage] = useState<File | null>(null);
   const [appStartTime] = useState(Date.now());
-  const [wifiName, setWifiName] = useState('Unknown');
 
   const nextSlide = () => {
     if (currentSlide < onboardingSlides.length - 1) {
@@ -116,16 +114,6 @@ export default function App() {
     }
   };
 
-  // Get WiFi name using real system API
-  const getWifiName = useCallback(async () => {
-    try {
-      const wifiName = await apiGetWifiName();
-      setWifiName(wifiName);
-    } catch (error) {
-      console.error('Failed to get WiFi name:', error);
-      setWifiName('Unknown');
-    }
-  }, []);
 
   // Calculate uptime
   const getUptime = useCallback(() => {
@@ -180,9 +168,7 @@ export default function App() {
       setShowSlideshow(true);
       setCurrentSlide(0);
     }
-    // Load real-time data
-    await getWifiName();
-  }, [getWifiName]);
+  }, []);
 
   useEffect(() => {
     loadIdentity();
@@ -1358,10 +1344,6 @@ export default function App() {
             <div className="flex justify-between">
               <span className="text-slate-400 text-sm">Uptime:</span>
               <span className="text-white text-sm">{getUptime()}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400 text-sm">WiFi Network:</span>
-              <span className="text-blue-400 text-sm">{wifiName}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400 text-sm">Account:</span>
