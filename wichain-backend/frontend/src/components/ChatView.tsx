@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   User, 
-  CheckCheck
+  CheckCheck,
+  ArrowDown
 } from 'lucide-react';
 import type { ChatBody, GroupInfo } from '../lib/api';
 
@@ -15,15 +16,16 @@ interface Props {
   searchQuery: string;
 }
 
-export function ChatView({ 
-  messages, 
-  myPubkeyB64, 
-  selectedTarget, 
-  aliasMap, 
+export function ChatView({
+  messages,
+  myPubkeyB64,
+  selectedTarget,
+  aliasMap,
   groups,
   searchQuery
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
   // Filter messages for the selected target and search
   const filteredMessages = messages.filter((msg) => {
@@ -72,9 +74,50 @@ export function ChatView({
   useEffect(() => {
     if (scrollRef.current && !searchQuery.trim()) {
       const scrollContainer = scrollRef.current;
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      // Use setTimeout to ensure DOM is fully updated
+      setTimeout(() => {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }, 100);
     }
   }, [filteredMessages, searchQuery]);
+
+  // Force scroll to bottom when component mounts or target changes
+  useEffect(() => {
+    if (scrollRef.current) {
+      const scrollContainer = scrollRef.current;
+      setTimeout(() => {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }, 200);
+    }
+  }, [selectedTarget]);
+
+  // Handle scroll events to show/hide scroll button
+  const handleScroll = () => {
+    if (scrollRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      setShowScrollButton(!isNearBottom);
+    }
+  };
+
+  // Add scroll event listener
+  useEffect(() => {
+    const scrollContainer = scrollRef.current;
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleScroll);
+      return () => scrollContainer.removeEventListener('scroll', handleScroll);
+    }
+  }, []);
+
+  // Scroll to bottom function
+  const scrollToBottom = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  };
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -177,7 +220,14 @@ export function ChatView({
       </motion.div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4" ref={scrollRef}>
+      <div 
+        className="flex-1 overflow-y-auto p-4 scroll-smooth relative" 
+        ref={scrollRef}
+        style={{ 
+          scrollBehavior: 'smooth',
+          WebkitOverflowScrolling: 'touch'
+        }}
+      >
         <div className="space-y-6">
           <AnimatePresence>
             {Object.entries(groupedMessages).map(([date, dateMessages], dateIndex) => (
@@ -331,6 +381,21 @@ export function ChatView({
             </motion.div>
           )}
         </div>
+
+        {/* Scroll to Bottom Button */}
+        {showScrollButton && (
+          <motion.button
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 w-12 h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-full shadow-lg flex items-center justify-center transition-colors z-10"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+          >
+            <ArrowDown size={20} />
+          </motion.button>
+        )}
       </div>
     </div>
   );
