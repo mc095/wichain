@@ -1,56 +1,61 @@
 # WiChain Mobile App Development
 
-This guide explains how to build and run WiChain as a mobile app using Tauri's mobile support.
+This guide explains how to build and run WiChain as a mobile app using Capacitor (recommended) or Tauri's mobile support.
 
-## Prerequisites
+## Current Status
 
-### For Android Development
-1. Install Android Studio
-2. Install Android SDK (API level 21+)
-3. Set up Android emulator or connect physical device
-4. Enable Developer Options and USB Debugging on your device
+**Tauri Mobile**: Currently in alpha and has compatibility issues with the current setup.
+**Recommended**: Use Capacitor for mobile development (see below).
 
-### For iOS Development (macOS only)
-1. Install Xcode (latest version)
-2. Install Xcode Command Line Tools
-3. Set up iOS Simulator or connect physical device
-4. Sign in with Apple Developer account
+## Option 1: Capacitor (Recommended)
 
-## Installation
+### Prerequisites
+1. Install Node.js and npm
+2. For Android: Install Android Studio and Android SDK
+3. For iOS: Install Xcode (macOS only)
 
-1. Install Tauri CLI with mobile support:
+### Setup
 ```bash
+# Install Capacitor
+cd frontend
+npm install @capacitor/core @capacitor/cli
+npx cap init "WiChain" "com.wichain.app" --web-dir=dist
+
+# Add platforms
+npm install @capacitor/android @capacitor/ios
+npx cap add android
+npx cap add ios
+
+# Build and sync
+npm run build
+npx cap sync
+```
+
+### Development
+```bash
+# Android
+npx cap run android
+
+# iOS
+npx cap run ios
+```
+
+## Option 2: Tauri Mobile (Alpha)
+
+**Note**: This requires Tauri 2.0 alpha which has compatibility issues.
+
+### Prerequisites
+1. Install Tauri CLI alpha version
+2. Update dependencies to alpha versions
+3. Configure mobile settings
+
+### Setup
+```bash
+# Install alpha CLI
 cargo install tauri-cli --version "^2.0.0-alpha" --locked
-```
 
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Build the frontend:
-```bash
-cd frontend && npm run build
-```
-
-## Development
-
-### Android Development
-```bash
-# Start Android development server
-npm run dev:android
-
-# Build Android APK
-npm run build:android
-```
-
-### iOS Development
-```bash
-# Start iOS development server
-npm run dev:ios
-
-# Build iOS app
-npm run build:ios
+# Update dependencies
+npm install @tauri-apps/cli@next @tauri-apps/api@next
 ```
 
 ## Mobile-Specific Features

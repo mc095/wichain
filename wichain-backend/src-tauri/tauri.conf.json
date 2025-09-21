@@ -23,19 +23,6 @@
       "csp": null
     }
   },
-  "mobile": {
-    "ios": {
-      "bundleId": "com.wichain.app",
-      "displayName": "WiChain",
-      "minimumSystemVersion": "13.0"
-    },
-    "android": {
-      "packageName": "com.wichain.app",
-      "displayName": "WiChain",
-      "minSdkVersion": 21,
-      "targetSdkVersion": 34
-    }
-  },
   "bundle": {
     "active": true,
     "targets": "all",
