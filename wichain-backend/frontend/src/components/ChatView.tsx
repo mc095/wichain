@@ -210,7 +210,57 @@ export function ChatView({
                               whileHover={{ scale: 1.02 }}
                               transition={{ type: "spring", stiffness: 400 }}
                             >
-                              <p className="text-sm leading-relaxed">{message.text}</p>
+                              {(() => {
+                                // Check if message contains image data
+                                const imageMatch = message.text.match(/\[IMAGE_DATA:(.+?)\]/);
+                                if (imageMatch) {
+                                  try {
+                                    const imageData = JSON.parse(imageMatch[1]);
+                                    const textWithoutImage = message.text.replace(/\[IMAGE_DATA:.+?\]/, '').trim();
+                                    
+                                    return (
+                                      <div className="space-y-2">
+                                        {textWithoutImage && (
+                                          <p className="text-sm leading-relaxed">{textWithoutImage}</p>
+                                        )}
+                                        <div className="relative">
+                                          <img 
+                                            src={imageData.data} 
+                                            alt={imageData.filename}
+                                            className="max-w-xs max-h-64 rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                                            onClick={() => {
+                                              // Open image in new tab
+                                              const newWindow = window.open();
+                                              if (newWindow) {
+                                                newWindow.document.write(`
+                                                  <html>
+                                                    <head><title>${imageData.filename}</title></head>
+                                                    <body style="margin:0;padding:20px;background:#000;display:flex;justify-content:center;align-items:center;min-height:100vh;">
+                                                      <img src="${imageData.data}" style="max-width:100%;max-height:100%;object-fit:contain;" />
+                                                    </body>
+                                                  </html>
+                                                `);
+                                              }
+                                            }}
+                                          />
+                                          <div className="text-xs text-white/70 mt-1">
+                                            📷 {imageData.filename} 
+                                            {imageData.compressedSize ? 
+                                              ` (${Math.round(imageData.compressedSize / 1024)}KB compressed from ${Math.round(imageData.originalSize / 1024)}KB)` :
+                                              ` (${Math.round(imageData.size / 1024)}KB)`
+                                            }
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  } catch (error) {
+                                    console.error('Error parsing image data:', error);
+                                    return <p className="text-sm leading-relaxed">{message.text}</p>;
+                                  }
+                                }
+                                
+                                return <p className="text-sm leading-relaxed">{message.text}</p>;
+                              })()}
                             </motion.div>
                             
                             <div className={`flex items-center space-x-1 mt-1 ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>

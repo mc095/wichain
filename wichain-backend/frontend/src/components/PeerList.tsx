@@ -15,6 +15,7 @@ interface Props {
   selected: { kind: 'peer' | 'group'; id: string } | null;
   onSelectPeer: (id: string) => void;
   onSelectGroup: (id: string) => void;
+  messages: any[]; // Add messages prop to get real latest messages
 }
 
 export function PeerList({ 
@@ -24,7 +25,8 @@ export function PeerList({
   myPub, 
   selected, 
   onSelectPeer, 
-  onSelectGroup 
+  onSelectGroup,
+  messages
 }: Props) {
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -37,17 +39,42 @@ export function PeerList({
     return date.toLocaleDateString();
   };
 
-  const getLastMessage = (_peerId: string) => {
-    // This would typically come from your chat history
-    // For now, we'll simulate some messages
-    const messages = [
-      "Hey, how are you doing?",
-      "Let's discuss this tomorrow",
-      "You: Ok, see you soon!",
-      "Thanks for the update",
-      "Can we schedule a meeting?"
-    ];
-    return messages[Math.floor(Math.random() * messages.length)];
+  const getLastMessage = (peerId: string) => {
+    // Get the latest message for this peer
+    const peerMessages = messages.filter(msg => 
+      (msg.from === myPub && msg.to === peerId) || 
+      (msg.from === peerId && msg.to === myPub)
+    );
+    
+    if (peerMessages.length === 0) {
+      return "No messages yet";
+    }
+    
+    // Sort by timestamp and get the latest
+    const latestMessage = peerMessages.sort((a, b) => b.ts_ms - a.ts_ms)[0];
+    
+    // Extract text from image messages
+    const imageMatch = latestMessage.text.match(/\[IMAGE_DATA:(.+?)\]/);
+    if (imageMatch) {
+      const textWithoutImage = latestMessage.text.replace(/\[IMAGE_DATA:.+?\]/, '').trim();
+      return textWithoutImage || "📷 Image";
+    }
+    
+    return latestMessage.text;
+  };
+
+  const getLastMessageTime = (peerId: string) => {
+    const peerMessages = messages.filter(msg => 
+      (msg.from === myPub && msg.to === peerId) || 
+      (msg.from === peerId && msg.to === myPub)
+    );
+    
+    if (peerMessages.length === 0) {
+      return null;
+    }
+    
+    const latestMessage = peerMessages.sort((a, b) => b.ts_ms - a.ts_ms)[0];
+    return latestMessage.ts_ms;
   };
 
   const getConnectionStatus = (_peer: PeerInfo) => {
@@ -127,13 +154,11 @@ export function PeerList({
                         
                         <div className="flex items-center justify-between mt-1">
                           <span className="text-slate-500 text-xs">
-                            {formatTime(peer.last_seen_ms || Date.now())}
+                            {(() => {
+                              const lastMsgTime = getLastMessageTime(peer.id);
+                              return lastMsgTime ? formatTime(lastMsgTime) : 'No messages';
+                            })()}
                           </span>
-                          {Math.random() > 0.7 && (
-                            <div className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
-                              <span className="text-white text-xs font-bold">1</span>
-                            </div>
-                          )}
                         </div>
                       </div>
                     </div>

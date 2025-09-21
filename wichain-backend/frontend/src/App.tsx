@@ -97,8 +97,6 @@ export default function App() {
   const [messagesSent, setMessagesSent] = useState(0);
   const [appStartTime] = useState(Date.now());
   const [wifiName, setWifiName] = useState('Unknown');
-  const [responseTime, setResponseTime] = useState(0);
-  const [currentTime, setCurrentTime] = useState(new Date());
 
   const nextSlide = () => {
     if (currentSlide < onboardingSlides.length - 1) {
@@ -135,18 +133,6 @@ export default function App() {
     return `${hours}h ${minutes}m`;
   }, [appStartTime]);
 
-  // Measure response time
-  const measureResponseTime = useCallback(async () => {
-    const start = Date.now();
-    try {
-      // Simulate a network request to measure response time
-      await new Promise(resolve => setTimeout(resolve, Math.random() * 100 + 20));
-      const end = Date.now();
-      setResponseTime(end - start);
-    } catch (error) {
-      setResponseTime(0);
-    }
-  }, []);
 
   const handleExit = useCallback(async () => {
     try {
@@ -163,6 +149,13 @@ export default function App() {
   const handleImageSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file && file.type.startsWith('image/')) {
+      // Check file size (limit to 5MB original, ~6.5MB base64)
+      const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+      if (file.size > MAX_SIZE) {
+        alert(`Image too large! Maximum size is ${MAX_SIZE / (1024 * 1024)}MB. Your image is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`);
+        return;
+      }
+      
       setSelectedImage(file);
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -186,22 +179,13 @@ export default function App() {
     }
     // Load real-time data
     await getWifiName();
-    await measureResponseTime();
-  }, [getWifiName, measureResponseTime]);
+  }, [getWifiName]);
 
   useEffect(() => {
     loadIdentity();
   }, [loadIdentity]);
 
   // Update statistics periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      measureResponseTime();
-      setCurrentTime(new Date());
-    }, 5000); // Update every 5 seconds
-
-    return () => clearInterval(interval);
-  }, [measureResponseTime]);
 
   // Groups
   const [groups, setGroups] = useState<GroupInfo[]>([]);
@@ -299,28 +283,107 @@ export default function App() {
     setSending(true);
     let ok = false;
     
-    // Create message content
-    let messageContent = msg;
-    if (hasImage && imagePreview) {
-      messageContent = msg ? `${msg}\n[Image: ${selectedImage?.name}]` : `[Image: ${selectedImage?.name}]`;
+    try {
+      // Create message content
+      let messageContent = msg;
+      
+      if (hasImage && selectedImage) {
+        // Compress image before sending
+        const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.8): Promise<string> => {
+          return new Promise((resolve) => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new window.Image();
+            
+            img.onload = () => {
+              // Calculate new dimensions
+              let { width, height } = img;
+              if (width > maxWidth) {
+                height = (height * maxWidth) / width;
+                width = maxWidth;
+              }
+              
+              canvas.width = width;
+              canvas.height = height;
+              
+              // Draw and compress
+              ctx?.drawImage(img, 0, 0, width, height);
+              const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+              resolve(compressedDataUrl);
+            };
+            
+            img.src = URL.createObjectURL(file);
+          });
+        };
+        
+        try {
+          const compressedImage = await compressImage(selectedImage);
+          const imageData = {
+            type: 'image',
+            filename: selectedImage.name,
+            data: compressedImage,
+            originalSize: selectedImage.size,
+            compressedSize: compressedImage.length,
+            mimeType: 'image/jpeg'
+          };
+          
+          // Check if compressed image is still too large
+          const MAX_BASE64_SIZE = 6 * 1024 * 1024; // 6MB base64 limit
+          if (compressedImage.length > MAX_BASE64_SIZE) {
+            alert('Image is too large even after compression. Please choose a smaller image.');
+            setSending(false);
+            return;
+          }
+          
+          // Send image data as JSON string
+          const imageMessage = msg ? `${msg}\n[IMAGE_DATA:${JSON.stringify(imageData)}]` : `[IMAGE_DATA:${JSON.stringify(imageData)}]`;
+          
+          if (target.kind === 'peer') {
+            ok = await apiAddPeerMessage(imageMessage, target.id);
+          } else if (target.kind === 'group') {
+            ok = await apiAddGroupMessage(imageMessage, target.id);
+          }
+          
+          setSending(false);
+          if (ok) {
+            setText('');
+            setSelectedImage(null);
+            setImagePreview(null);
+            setMessagesSent(prev => prev + 1);
+            refreshMessages();
+          } else {
+            console.warn('Send failed (see backend log).');
+          }
+        } catch (error) {
+          console.error('Error compressing image:', error);
+          setSending(false);
+          alert('Failed to process image. Please try again.');
+        }
+        return; // Exit early
+      }
+      
+      // Send text message
+      if (target.kind === 'peer') {
+        ok = await apiAddPeerMessage(messageContent, target.id);
+      } else if (target.kind === 'group') {
+        ok = await apiAddGroupMessage(messageContent, target.id);
+      }
+      
+      setSending(false);
+      if (ok) {
+        setText('');
+        setSelectedImage(null);
+        setImagePreview(null);
+        setMessagesSent(prev => prev + 1);
+        refreshMessages();
+      } else {
+        console.warn('Send failed (see backend log).');
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setSending(false);
     }
-    
-    if (target.kind === 'peer') {
-      ok = await apiAddPeerMessage(messageContent, target.id);
-    } else if (target.kind === 'group') {
-      ok = await apiAddGroupMessage(messageContent, target.id);
-    }
-    setSending(false);
-    if (ok) {
-      setText('');
-      setSelectedImage(null);
-      setImagePreview(null);
-      setMessagesSent(prev => prev + 1); // Track real messages sent
-      refreshMessages();
-    } else {
-      console.warn('Send failed (see backend log).');
-    }
-  }, [text, target, identity, refreshMessages, selectedImage, imagePreview]);
+  }, [text, target, identity, refreshMessages, selectedImage]);
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -618,6 +681,7 @@ export default function App() {
                 onSelectGroup={(id) => {
                   setTarget({ kind: 'group', id });
                 }}
+                messages={messages}
               />
             </div>
           </div>
@@ -1076,10 +1140,6 @@ export default function App() {
               <span className="text-white text-sm">{groups.length}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400 text-sm">Response Time:</span>
-              <span className="text-green-400 text-sm">{responseTime}ms</span>
-            </div>
-            <div className="flex justify-between">
               <span className="text-slate-400 text-sm">Uptime:</span>
               <span className="text-white text-sm">{getUptime()}</span>
             </div>
@@ -1090,10 +1150,6 @@ export default function App() {
             <div className="flex justify-between">
               <span className="text-slate-400 text-sm">Account:</span>
               <span className="text-white text-sm">{identity?.alias || 'Unknown'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400 text-sm">Current Time:</span>
-              <span className="text-white text-sm">{currentTime.toLocaleTimeString()}</span>
             </div>
           </div>
         </motion.div>
