@@ -38,8 +38,6 @@ mod group_manager;
 use group_manager::{GroupInfo, GroupManager};
 
 mod test_runner;
-mod mongodb_storage;
-use mongodb_storage::{MongoStorageArc, init_mongodb_storage, blockchain_to_mongo_message};
 
 /// ---- config ----------------------------------------------------------------
 const WICHAIN_PORT: u16 = 60000;
@@ -155,7 +153,6 @@ pub struct AppState {
     pub groups: Arc<GroupManager>,
     pub blockchain_path: PathBuf,
     pub identity_path: PathBuf,
-    pub mongodb: MongoStorageArc,
 }
 
 // -----------------------------------------------------------------------------
@@ -357,7 +354,6 @@ async fn record_decrypted_chat(
     blockchain_path: &Path,
     chat_signed: &ChatSigned,
     network_from_b64: &str,
-    mongodb: &MongoStorageArc,
 ) {
     // best-effort signature check (log only)
     if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&chat_signed.body.from) {
@@ -389,24 +385,6 @@ async fn record_decrypted_chat(
         }
     }
     
-    // Save to MongoDB
-    {
-        let mongodb_guard = mongodb.lock().await;
-        if let Some(storage) = mongodb_guard.as_ref() {
-            let mongo_message = blockchain_to_mongo_message(
-                chat_signed.body.from.clone(),
-                chat_signed.body.to.clone().unwrap_or_default(),
-                chat_signed.body.text.clone(),
-                chat_signed.body.ts_ms,
-                chat_signed.sig_b64.clone(),
-                true, // encrypted
-            );
-            
-            if let Err(e) = storage.save_message(mongo_message).await {
-                warn!("Failed to save message to MongoDB: {e}");
-            }
-        }
-    }
     
     let _ = app.emit("chat_update", ());
 }
@@ -425,7 +403,6 @@ async fn handle_incoming_network_payload(
     payload_str: &str,
     node: &Arc<NetworkNode>,
     groups: &Arc<GroupManager>,
-    mongodb: &MongoStorageArc,
 ) {
     let cleaned = clean_transport_payload(payload_str);
 
@@ -433,7 +410,7 @@ async fn handle_incoming_network_payload(
     if let Ok(clear) = decrypt_json_aes256gcm(my_pub_b64, network_from_b64, cleaned) {
         // Try parsing as ChatSigned
         if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
-            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64, mongodb).await;
+            record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
             return; // SUCCESS - exit early to prevent duplicate processing
         }
         // Try parsing as GroupCreateSigned
@@ -469,7 +446,7 @@ async fn handle_incoming_network_payload(
         if let Ok(clear) = decrypt_json_aes256gcm(my_pub_b64, &p.id, cleaned) {
             // Try parsing as ChatSigned
             if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(&clear) {
-                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id, mongodb).await;
+                record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, &p.id).await;
                 return; // SUCCESS - exit early
             }
             // Try parsing as GroupCreateSigned
@@ -495,14 +472,14 @@ async fn handle_incoming_network_payload(
 
     // ---- 2. Maybe payload was never obfuscated (direct ChatSigned JSON) ----
     if let Ok(chat_signed) = serde_json::from_str::<ChatSigned>(cleaned) {
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64, mongodb).await;
+        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return; // SUCCESS - exit early
     }
 
     // ---- 3. Or a bare ChatBody JSON ----
     if let Ok(body) = serde_json::from_str::<ChatBody>(cleaned) {
         let chat_signed = ChatSigned { body, sig_b64: String::new() };
-        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64, mongodb).await;
+        record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
         return; // SUCCESS - exit early
     }
 
@@ -525,7 +502,7 @@ async fn handle_incoming_network_payload(
         },
         sig_b64: String::new(),
     };
-    record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64, mongodb).await;
+    record_decrypted_chat(app, blockchain, blockchain_path, &chat_signed, network_from_b64).await;
 }
 
 // -----------------------------------------------------------------------------
@@ -717,30 +694,7 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
         id.public_key_b64.clone()
     };
     
-    // Try to get messages from MongoDB first
-    let mongodb_guard = state.mongodb.lock().await;
-    if let Some(storage) = mongodb_guard.as_ref() {
-        match storage.get_chat_history(&my_pub, "", Some(1000)).await {
-            Ok(mongo_messages) => {
-                let mut out = Vec::new();
-                for mongo_msg in mongo_messages {
-                    let chat_body = ChatBody {
-                        from: mongo_msg.from,
-                        to: Some(mongo_msg.to),
-                        text: mongo_msg.message,
-                        ts_ms: mongo_msg.timestamp,
-                    };
-                    out.push(chat_body);
-                }
-                return Ok(out);
-            }
-            Err(e) => {
-                warn!("Failed to get chat history from MongoDB: {e}, falling back to blockchain");
-            }
-        }
-    }
-    
-    // Fallback to blockchain if MongoDB fails
+    // Get messages from blockchain
     let chain = state.blockchain.lock().await;
     let mut out = Vec::new();
     for b in &chain.chain {
@@ -801,17 +755,6 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
         }
     }
 
-    // Clear MongoDB messages
-    {
-        let mongodb_guard = state.mongodb.lock().await;
-        if let Some(storage) = mongodb_guard.as_ref() {
-            if let Err(e) = storage.clear_all_messages().await {
-                warn!("Failed to clear MongoDB messages: {e}");
-            } else {
-                info!("✅ MongoDB messages cleared");
-            }
-        }
-    }
 
     warn!("Local WiChain chat history cleared; identity preserved.");
     let _ = state.app.emit("reset_done", ());
@@ -1128,13 +1071,6 @@ fn main() {
                 node_alias, node_id, WICHAIN_PORT
             );
 
-            // --- MongoDB Storage --------------------------------------------------------
-            let mongodb = tauri::async_runtime::block_on(async {
-                init_mongodb_storage().await.unwrap_or_else(|e| {
-                    warn!("Failed to initialize MongoDB: {}", e);
-                    Arc::new(Mutex::new(None))
-                })
-            });
 
             // --- Background network->state bridge --------------------------------------
             {
@@ -1144,7 +1080,6 @@ fn main() {
                 let node_for_task = node.clone();
                 let app_handle_for_task = app.handle().clone();
                 let groups_for_task = groups.clone();
-                let mongodb_for_task = mongodb.clone();
 
                 tauri::async_runtime::spawn(async move {
                     while let Some(msg) = rx.recv().await {
@@ -1164,7 +1099,6 @@ fn main() {
                                     &payload_json,
                                     &node_for_task,
                                     &groups_for_task,
-                                    &mongodb_for_task,
                                 )
                                 .await;
                             }
@@ -1199,7 +1133,6 @@ fn main() {
                 groups,
                 blockchain_path,
                 identity_path,
-                mongodb,
             });
 
             Ok(())
