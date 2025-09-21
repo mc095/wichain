@@ -14,7 +14,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncWriteExt, AsyncReadExt},
     net::{UdpSocket, TcpListener as TokioTcpListener, TcpStream as TokioTcpStream},
     sync::{mpsc, Mutex, RwLock},
     time::{timeout, Duration as TokioDuration},
@@ -230,8 +230,9 @@ impl NetworkNode {
             let tcp_manager = self.tcp_manager.clone();
             let node_id = self.id.clone();
             let alias = self.alias.clone();
+            let tx_tcp = tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = TcpConnectionManager::start_tcp_listener_static(tcp_manager, node_id, alias).await {
+                if let Err(e) = TcpConnectionManager::start_tcp_listener_static(tcp_manager, node_id, alias, tx_tcp).await {
                     error!("Failed to start TCP listener: {e:?}");
                 }
             });
@@ -485,6 +486,7 @@ impl TcpConnectionManager {
         tcp_manager: Arc<TcpConnectionManager>,
         _node_id: String,
         _alias: Arc<Mutex<String>>,
+        tx: mpsc::Sender<NetworkMessage>,
     ) -> anyhow::Result<()> {
         let bind_addr = format!("0.0.0.0:{}", tcp_manager.tcp_port);
         let listener = TokioTcpListener::bind(&bind_addr).await?;
@@ -496,21 +498,17 @@ impl TcpConnectionManager {
                 Ok((stream, addr)) => {
                     info!("New TCP connection from {}", addr);
                     
-                    // Create a connection entry
-                    let conn = TcpConnection {
-                        stream: Arc::new(Mutex::new(stream)),
-                        peer_id: format!("peer_{}", addr.port()), // Temporary ID based on port
-                        last_activity: Instant::now(),
-                        is_connected: true,
-                        message_count: 0,
-                        last_test_time: None,
-                    };
+                    let peer_id = format!("peer_{}", addr.port());
                     
-                    // Add to connections
-                    {
-                        let mut connections = tcp_manager.connections.write().await;
-                        connections.insert(conn.peer_id.clone(), conn);
-                    }
+                    // Start reading messages from this TCP connection
+                    let tx_clone = tx.clone();
+                    let tcp_manager_clone = tcp_manager.clone();
+                    let peer_id_clone = peer_id.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = Self::handle_tcp_connection_reading(stream, peer_id_clone, tx_clone, tcp_manager_clone).await {
+                            error!("TCP connection reading error: {e:?}");
+                        }
+                    });
                     
                     info!("✅ TCP connection established with peer from {}", addr);
                 }
@@ -519,6 +517,71 @@ impl TcpConnectionManager {
                 }
             }
         }
+    }
+
+    /// Handle reading messages from a TCP connection.
+    async fn handle_tcp_connection_reading(
+        mut stream: TokioTcpStream,
+        peer_id: String,
+        tx: mpsc::Sender<NetworkMessage>,
+        tcp_manager: Arc<TcpConnectionManager>,
+    ) -> anyhow::Result<()> {
+        let mut buffer = String::new();
+        let mut read_buf = vec![0u8; 4096];
+        
+        loop {
+            match stream.read(&mut read_buf).await {
+                Ok(0) => {
+                    info!("TCP connection closed by peer {}", peer_id);
+                    break;
+                }
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&read_buf[..n]);
+                    buffer.push_str(&data);
+                    
+                    // Process complete messages (separated by newlines)
+                    while let Some(newline_pos) = buffer.find('\n') {
+                        let message = buffer[..newline_pos].trim().to_string();
+                        buffer = buffer[newline_pos + 1..].to_string();
+                        
+                        if !message.is_empty() {
+                            // Try to parse as NetworkMessage
+                            if let Ok(network_msg) = serde_json::from_str::<NetworkMessage>(&message) {
+                                info!("📨 TCP message received from {}: {:?}", peer_id, network_msg);
+                                
+                                // Send to main message handler
+                                if let Err(e) = tx.send(network_msg).await {
+                                    error!("Failed to send TCP message to handler: {}", e);
+                                }
+                                
+                                // Update connection activity
+                                {
+                                    let mut connections = tcp_manager.connections.write().await;
+                                    if let Some(conn) = connections.get_mut(&peer_id) {
+                                        conn.last_activity = Instant::now();
+                                        conn.message_count += 1;
+                                    }
+                                }
+                            } else {
+                                warn!("Failed to parse TCP message from {}: {}", peer_id, message);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("TCP read error from {}: {}", peer_id, e);
+                    break;
+                }
+            }
+        }
+        
+        // Remove connection when done
+        {
+            let mut connections = tcp_manager.connections.write().await;
+            connections.remove(&peer_id);
+        }
+        
+        Ok(())
     }
 
     /// Handle incoming TCP connection.
