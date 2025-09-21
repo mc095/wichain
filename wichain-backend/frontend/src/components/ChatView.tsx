@@ -256,11 +256,12 @@ export function ChatView({
           scrollBehavior: 'auto',
           WebkitOverflowScrolling: 'touch',
           height: '100%',
-          maxHeight: 'calc(100vh - 200px)',
-          overscrollBehavior: 'contain'
+          maxHeight: 'calc(100vh - 280px)',
+          overscrollBehavior: 'contain',
+          marginBottom: '80px'
         }}
       >
-        <div className="space-y-6 pb-20">
+        <div className="space-y-6 pb-32 mobile-messages">
           <AnimatePresence>
             {Object.entries(groupedMessages).map(([date, dateMessages], dateIndex) => (
               <motion.div
@@ -412,6 +413,9 @@ export function ChatView({
               <p className="text-slate-500 text-sm">Start the conversation by sending a message</p>
             </motion.div>
           )}
+
+          {/* Bottom Spacer to prevent overlap with input */}
+          <div className="h-20"></div>
         </div>
 
         {/* Scroll to Bottom Button */}

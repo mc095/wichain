@@ -23,7 +23,13 @@
   
   /* Mobile chat layout */
   .chat-mobile {
-    padding-bottom: 80px !important; /* Space for mobile keyboard */
+    padding-bottom: 120px !important; /* Space for mobile keyboard and input */
+  }
+  
+  /* Mobile message spacing */
+  .mobile-messages {
+    padding-bottom: 100px !important;
+    margin-bottom: 80px !important;
   }
   
   /* Mobile message input */
