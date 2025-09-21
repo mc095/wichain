@@ -104,6 +104,8 @@ impl ChatSigned {
 pub struct GroupCreateBody {
     pub group_id: String,
     pub members: Vec<String>,
+    pub name: Option<String>,
+    pub profile_picture: Option<String>,
     pub ts_ms: u64,
 }
 
@@ -115,9 +117,55 @@ pub struct GroupCreateSigned {
     pub sig_b64: String,
 }
 
+/// Group update message for network propagation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupUpdateBody {
+    pub group_id: String,
+    pub update_type: String, // "name" or "profile_picture"
+    pub value: Option<String>,
+    pub ts_ms: u64,
+}
+
+/// Signed group update message.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupUpdateSigned {
+    #[serde(flatten)]
+    pub body: GroupUpdateBody,
+    pub sig_b64: String,
+}
+
 impl GroupCreateSigned {
     pub fn new_signed(body: GroupCreateBody, sk: &SigningKey) -> Self {
         let bytes = serde_json::to_vec(&body).expect("serialize group create body");
+        let sig = sk.sign(&bytes);
+        Self {
+            body,
+            sig_b64: general_purpose::STANDARD.encode(sig.to_bytes()),
+        }
+    }
+
+    pub fn verify(&self, vk: &VerifyingKey) -> bool {
+        let bytes = match serde_json::to_vec(&self.body) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let sig_bytes = match general_purpose::STANDARD.decode(&self.sig_b64) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        if sig_bytes.len() != 64 {
+            return false;
+        }
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&sig_bytes);
+        let sig = ed25519_dalek::Signature::from_bytes(&arr);
+        vk.verify_strict(&bytes, &sig).is_ok()
+    }
+}
+
+impl GroupUpdateSigned {
+    pub fn new_signed(body: GroupUpdateBody, sk: &SigningKey) -> Self {
+        let bytes = serde_json::to_vec(&body).expect("serialize group update body");
         let sig = sk.sign(&bytes);
         Self {
             body,
@@ -427,10 +475,40 @@ async fn handle_incoming_network_payload(
                     ) {
                         if group_create.verify(&vk) {
                             // Create group locally if signature is valid
-                            groups.create_group(group_create.body.members);
+                            groups.create_group_with_name(group_create.body.members, group_create.body.name);
                             let _ = app.emit("group_update", ()); // Notify frontend
                         } else {
                             warn!("Group create signature INVALID from {}..", &network_from_b64[..8]);
+                        }
+                    }
+                }
+            }
+            return; // SUCCESS - exit early
+        }
+        // Try parsing as GroupUpdateSigned
+        if let Ok(group_update) = serde_json::from_str::<GroupUpdateSigned>(&clear) {
+            // Verify signature
+            if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(network_from_b64) {
+                if sender_pub_bytes.len() == 32 {
+                    if let Ok(vk) = VerifyingKey::from_bytes(
+                        <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
+                    ) {
+                        if group_update.verify(&vk) {
+                            // Apply group update locally if signature is valid
+                            match group_update.body.update_type.as_str() {
+                                "name" => {
+                                    groups.update_group_name(&group_update.body.group_id, group_update.body.value);
+                                }
+                                "profile_picture" => {
+                                    groups.update_group_profile_picture(&group_update.body.group_id, group_update.body.value);
+                                }
+                                _ => {
+                                    warn!("Unknown group update type: {}", group_update.body.update_type);
+                                }
+                            }
+                            let _ = app.emit("group_update", ()); // Notify frontend
+                        } else {
+                            warn!("Group update signature INVALID from {}..", &network_from_b64[..8]);
                         }
                     }
                 }
@@ -461,10 +539,39 @@ async fn handle_incoming_network_payload(
                             <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
                         ) {
                             if group_create.verify(&vk) {
-                                groups.create_group(group_create.body.members);
+                                groups.create_group_with_name(group_create.body.members, group_create.body.name);
                                 let _ = app.emit("group_update", ()); // Notify frontend
                             } else {
                                 warn!("Group create signature INVALID from {}..", &p.id[..8]);
+                            }
+                        }
+                    }
+                }
+                return; // SUCCESS - exit early
+            }
+            // Try parsing as GroupUpdateSigned
+            if let Ok(group_update) = serde_json::from_str::<GroupUpdateSigned>(&clear) {
+                if let Ok(sender_pub_bytes) = general_purpose::STANDARD.decode(&p.id) {
+                    if sender_pub_bytes.len() == 32 {
+                        if let Ok(vk) = VerifyingKey::from_bytes(
+                            <&[u8; 32]>::try_from(sender_pub_bytes.as_slice()).unwrap(),
+                        ) {
+                            if group_update.verify(&vk) {
+                                // Apply group update locally if signature is valid
+                                match group_update.body.update_type.as_str() {
+                                    "name" => {
+                                        groups.update_group_name(&group_update.body.group_id, group_update.body.value);
+                                    }
+                                    "profile_picture" => {
+                                        groups.update_group_profile_picture(&group_update.body.group_id, group_update.body.value);
+                                    }
+                                    _ => {
+                                        warn!("Unknown group update type: {}", group_update.body.update_type);
+                                    }
+                                }
+                                let _ = app.emit("group_update", ()); // Notify frontend
+                            } else {
+                                warn!("Group update signature INVALID from {}..", &p.id[..8]);
                             }
                         }
                     }
@@ -624,13 +731,15 @@ async fn create_group(
     }
 
     // Create group locally with name
-    let group_id = state.groups.create_group_with_name(members.clone(), name);
+    let group_id = state.groups.create_group_with_name(members.clone(), name.clone());
     let _ = state.app.emit("group_update", ()); // Notify frontend
 
     // Prepare signed group creation message
     let group_create_body = GroupCreateBody {
         group_id: group_id.clone(),
         members: members.clone(),
+        name,
+        profile_picture: None, // Profile pictures are set separately
         ts_ms: now_ms(),
     };
     let group_create_signed = GroupCreateSigned::new_signed(group_create_body, &my_sk);
@@ -1069,9 +1178,37 @@ async fn delete_group(state: tauri::State<'_, AppState>, group_id: String) -> Re
 /// Update group name
 #[tauri::command]
 async fn update_group_name(state: tauri::State<'_, AppState>, group_id: String, name: Option<String>) -> Result<(), String> {
-    let success = state.groups.update_group_name(&group_id, name);
+    let success = state.groups.update_group_name(&group_id, name.clone());
     if success {
         let _ = state.app.emit("group_update", ());
+        
+        // Broadcast the update to all group members
+        if let Some(group) = state.groups.get_group(&group_id) {
+            let my_pub = state.identity.lock().await.public_key_b64.clone();
+            let my_sk = state.signing_key.lock().await.clone();
+            
+            let group_update_body = GroupUpdateBody {
+                group_id: group_id.clone(),
+                update_type: "name".to_string(),
+                value: name,
+                ts_ms: now_ms(),
+            };
+            let group_update_signed = GroupUpdateSigned::new_signed(group_update_body, &my_sk);
+            let clear_json = serde_json::to_string(&group_update_signed).unwrap();
+            
+            // Send update to all members (except self)
+            for member in group.members.iter().filter(|m| *m != &my_pub) {
+                let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, member, &clear_json)
+                    .unwrap_or_else(|e| {
+                        warn!("AES-256-GCM encryption failed for group member {}: {}, falling back to plain text", member, e);
+                        clear_json.clone()
+                    });
+                if let Err(e) = state.node.send_message(member, encrypted_b64).await {
+                    warn!("update_group_name: send_message error -> {}: {e}", member);
+                }
+            }
+        }
+        
         Ok(())
     } else {
         Err("Group not found".to_string())
@@ -1081,9 +1218,37 @@ async fn update_group_name(state: tauri::State<'_, AppState>, group_id: String, 
 /// Update group profile picture
 #[tauri::command]
 async fn update_group_profile_picture(state: tauri::State<'_, AppState>, group_id: String, profile_picture: Option<String>) -> Result<(), String> {
-    let success = state.groups.update_group_profile_picture(&group_id, profile_picture);
+    let success = state.groups.update_group_profile_picture(&group_id, profile_picture.clone());
     if success {
         let _ = state.app.emit("group_update", ());
+        
+        // Broadcast the update to all group members
+        if let Some(group) = state.groups.get_group(&group_id) {
+            let my_pub = state.identity.lock().await.public_key_b64.clone();
+            let my_sk = state.signing_key.lock().await.clone();
+            
+            let group_update_body = GroupUpdateBody {
+                group_id: group_id.clone(),
+                update_type: "profile_picture".to_string(),
+                value: profile_picture,
+                ts_ms: now_ms(),
+            };
+            let group_update_signed = GroupUpdateSigned::new_signed(group_update_body, &my_sk);
+            let clear_json = serde_json::to_string(&group_update_signed).unwrap();
+            
+            // Send update to all members (except self)
+            for member in group.members.iter().filter(|m| *m != &my_pub) {
+                let encrypted_b64 = encrypt_json_aes256gcm(&my_pub, member, &clear_json)
+                    .unwrap_or_else(|e| {
+                        warn!("AES-256-GCM encryption failed for group member {}: {}, falling back to plain text", member, e);
+                        clear_json.clone()
+                    });
+                if let Err(e) = state.node.send_message(member, encrypted_b64).await {
+                    warn!("update_group_profile_picture: send_message error -> {}: {e}", member);
+                }
+            }
+        }
+        
         Ok(())
     } else {
         Err("Group not found".to_string())

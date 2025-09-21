@@ -330,7 +330,7 @@ export async function apiDeleteGroup(groupId: string): Promise<boolean> {
 /** Update group name. */
 export async function apiUpdateGroupName(groupId: string, name: string | null): Promise<boolean> {
   try {
-    await invoke('update_group_name', { group_id: groupId, name });
+    await invoke('update_group_name', { groupId, name });
     return true;
   } catch (err) {
     console.error('update_group_name failed', err);
@@ -341,7 +341,7 @@ export async function apiUpdateGroupName(groupId: string, name: string | null): 
 /** Update group profile picture. */
 export async function apiUpdateGroupProfilePicture(groupId: string, profilePicture: string | null): Promise<boolean> {
   try {
-    await invoke('update_group_profile_picture', { group_id: groupId, profile_picture: profilePicture });
+    await invoke('update_group_profile_picture', { groupId, profilePicture });
     return true;
   } catch (err) {
     console.error('update_group_profile_picture failed', err);
