@@ -384,8 +384,6 @@ async fn record_decrypted_chat(
             warn!("Failed saving chain after chat: {e}");
         }
     }
-    
-    
     let _ = app.emit("chat_update", ());
 }
 
@@ -693,8 +691,6 @@ async fn get_chat_history(state: tauri::State<'_, AppState>) -> Result<Vec<ChatB
         let id = state.identity.lock().await;
         id.public_key_b64.clone()
     };
-    
-    // Get messages from blockchain
     let chain = state.blockchain.lock().await;
     let mut out = Vec::new();
     for b in &chain.chain {
@@ -754,7 +750,6 @@ async fn reset_data(state: tauri::State<'_, AppState>) -> Result<(), String> {
             warn!("Failed to save new blockchain: {e}");
         }
     }
-
 
     warn!("Local WiChain chat history cleared; identity preserved.");
     let _ = state.app.emit("reset_done", ());
@@ -1070,7 +1065,6 @@ fn main() {
                 "✅ Node started: alias={} id={} port={}",
                 node_alias, node_id, WICHAIN_PORT
             );
-
 
             // --- Background network->state bridge --------------------------------------
             {
