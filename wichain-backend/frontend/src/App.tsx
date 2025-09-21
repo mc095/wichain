@@ -270,6 +270,7 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const send = useCallback(async () => {
     const msg = text.trim();
     const hasImage = selectedImage !== null;
@@ -394,6 +395,21 @@ export default function App() {
       refreshMessages();
     }
   }
+
+  // Clear current chat
+  const clearCurrentChat = useCallback(async () => {
+    if (!target) return;
+    
+    if (window.confirm('Are you sure you want to clear this chat? This action cannot be undone.')) {
+      const ok = await apiResetData();
+      if (ok) {
+        refreshMessages();
+        setTarget(null);
+      } else {
+        console.warn('Clear chat failed (see backend log).');
+      }
+    }
+  }, [target, refreshMessages]);
 
   // Onboarding
   async function onboardingDone(alias: string) {
@@ -722,20 +738,22 @@ export default function App() {
               </div>
 
               <div className="flex items-center space-x-2">
-                <button className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors">
-                  <Search size={16} />
-                </button>
-                <button className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors">
-                  <Phone size={16} />
-                </button>
-                <button className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors">
-                  <Video size={16} />
-                </button>
-                <button className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors">
-                  <Pin size={16} />
-                </button>
-                <button className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors">
-                  <MoreVertical size={16} />
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search messages..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="px-3 py-1 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white text-sm placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors w-48"
+                  />
+                  <Search size={14} className="absolute right-2 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                </div>
+                <button 
+                  onClick={clearCurrentChat}
+                  className="p-2 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-900/20 transition-colors"
+                  title="Clear Chat"
+                >
+                  <X size={16} />
                 </button>
               </div>
             </motion.div>
@@ -748,6 +766,7 @@ export default function App() {
                 selectedTarget={target}
                 aliasMap={aliasMap}
                 groups={groups}
+                searchQuery={searchQuery}
               />
             </div>
 
@@ -851,96 +870,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Right Sidebar - Chat Details */}
-      {target && (
-        <motion.div 
-          className="w-80 bg-slate-800/30 backdrop-blur-xl border-l border-slate-700/50 p-4"
-          initial={{ x: 100, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ duration: 0.5 }}
-        >
-          <div className="space-y-6">
-            {/* Members Section */}
-            <div>
-              <h4 className="text-white font-semibold mb-3 flex items-center">
-                <Users size={16} className="mr-2" />
-                Members
-              </h4>
-              <div className="space-y-2">
-                {target.kind === 'group' ? (
-                  groups.find(g => g.id === target.id)?.members.map((memberId, index) => (
-                    <motion.div 
-                      key={memberId}
-                      className="flex items-center space-x-3 p-2 rounded-lg hover:bg-slate-700/30 transition-colors"
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.1 }}
-                    >
-                      <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
-                        <span className="text-white text-xs font-semibold">
-                          {(aliasMap[memberId] || memberId).charAt(0).toUpperCase()}
-                        </span>
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-white text-sm font-medium">
-                          {aliasMap[memberId] || memberId.slice(0, 8) + '...'}
-                          {memberId === myPub && " (You)"}
-                        </p>
-                        <p className="text-xs text-slate-400">Online</p>
-                      </div>
-                      {memberId === myPub && (
-                        <span className="px-2 py-1 bg-blue-500/20 text-blue-300 text-xs rounded-full">
-                          Admin
-                        </span>
-                      )}
-                    </motion.div>
-                  ))
-                ) : (
-                  <motion.div 
-                    className="flex items-center space-x-3 p-2 rounded-lg"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                  >
-                    <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs font-semibold">
-                        {(aliasMap[target.id] || target.id).charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-white text-sm font-medium">{aliasMap[target.id] || target.id.slice(0, 8) + '...'}</p>
-                      <p className="text-xs text-green-400">Online</p>
-                    </div>
-                  </motion.div>
-                )}
-              </div>
-            </div>
-
-            <div className="h-px bg-slate-700/50"></div>
-
-            {/* Files Section */}
-            <div>
-              <h4 className="text-white font-semibold mb-3 flex items-center">
-                <Paperclip size={16} className="mr-2" />
-                Files
-              </h4>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-700/30 transition-colors cursor-pointer">
-                  <span className="text-slate-400 text-sm">115 photos</span>
-                  <span className="text-slate-500 text-xs">↗</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-700/30 transition-colors cursor-pointer">
-                  <span className="text-slate-400 text-sm">208 files</span>
-                  <span className="text-slate-500 text-xs">↗</span>
-                </div>
-                <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-700/30 transition-colors cursor-pointer">
-                  <span className="text-slate-400 text-sm">47 shared links</span>
-                  <span className="text-slate-500 text-xs">↗</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      )}
 
       {/* Modals */}
       <AnimatePresence>

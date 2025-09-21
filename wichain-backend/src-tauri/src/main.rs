@@ -763,7 +763,7 @@ async fn get_wifi_name() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let output = Command::new("powershell")
-            .args(&["-Command", "(Get-NetConnectionProfile).Name"])
+            .args(&["-WindowStyle", "Hidden", "-Command", "(Get-NetConnectionProfile).Name"])
             .output()
             .map_err(|e| format!("Failed to execute PowerShell command: {}", e))?;
 

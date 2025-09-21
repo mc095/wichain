@@ -12,6 +12,7 @@ interface Props {
   selectedTarget: { kind: 'peer' | 'group'; id: string } | null;
   aliasMap: Record<string, string>;
   groups: GroupInfo[];
+  searchQuery: string;
 }
 
 export function ChatView({ 
@@ -19,30 +20,61 @@ export function ChatView({
   myPubkeyB64, 
   selectedTarget, 
   aliasMap, 
-  groups 
+  groups,
+  searchQuery
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Filter messages for the selected target
+  // Filter messages for the selected target and search
   const filteredMessages = messages.filter((msg) => {
     if (!selectedTarget) return false;
     
+    let matchesTarget = false;
     if (selectedTarget.kind === 'peer') {
-      return (
+      matchesTarget = (
         (msg.from === myPubkeyB64 && msg.to === selectedTarget.id) ||
         (msg.from === selectedTarget.id && msg.to === myPubkeyB64)
       );
     } else {
-      return msg.to === selectedTarget.id;
+      matchesTarget = msg.to === selectedTarget.id;
     }
+    
+    if (!matchesTarget) return false;
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const searchLower = searchQuery.toLowerCase();
+      const messageText = msg.text.toLowerCase();
+      
+      // Check if message contains search query
+      if (messageText.includes(searchLower)) {
+        return true;
+      }
+      
+      // Check if it's an image message and search matches filename
+      const imageMatch = msg.text.match(/\[IMAGE_DATA:(.+?)\]/);
+      if (imageMatch) {
+        try {
+          const imageData = JSON.parse(imageMatch[1]);
+          return imageData.filename.toLowerCase().includes(searchLower);
+        } catch (error) {
+          return false;
+        }
+      }
+      
+      return false;
+    }
+    
+    return true;
   });
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive (only if not searching)
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (scrollRef.current && !searchQuery.trim()) {
+      const scrollContainer = scrollRef.current;
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
     }
-  }, [filteredMessages]);
+  }, [filteredMessages, searchQuery]);
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -102,10 +134,10 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col">
       {/* Chat Header with Banner */}
-      <motion.div 
+        <motion.div
         className="relative h-48 bg-gradient-to-br from-blue-600/20 to-purple-600/20 overflow-hidden"
         initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
+          animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
       >
         {/* Animated Background */}
@@ -270,17 +302,17 @@ export function ChatView({
                               {isMe && (
                                 <div className="flex items-center">
                                   <CheckCheck size={12} className="text-blue-400" />
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                </div>
+              )}
+              </div>
+            </div>
                         </div>
                       </motion.div>
                     );
                   })}
-                </div>
-              </motion.div>
-            ))}
+          </div>
+        </motion.div>
+      ))}
           </AnimatePresence>
 
           {/* Empty State */}
