@@ -1001,6 +1001,153 @@ async fn force_tcp_connections(state: tauri::State<'_, AppState>) -> Result<Stri
     Ok(results.join("\n"))
 }
 
+/// Delete all messages with a specific peer
+#[tauri::command]
+async fn delete_peer_messages(state: tauri::State<'_, AppState>, peer_id: String) -> Result<(), String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let mut chain = state.blockchain.lock().await;
+    
+    // Filter out messages with this peer
+    let original_count = chain.chain.len();
+    chain.chain.retain(|block| {
+        if let Ok(signed) = serde_json::from_str::<ChatSigned>(&block.data) {
+            // Check if this message is with the specified peer
+            let is_with_peer = (signed.body.from == my_pub && signed.body.to.as_deref() == Some(&peer_id)) ||
+                              (signed.body.from == peer_id && signed.body.to.as_deref() == Some(&my_pub));
+            !is_with_peer
+        } else if let Ok(body) = serde_json::from_str::<ChatBody>(&block.data) {
+            // Check if this message is with the specified peer
+            let is_with_peer = (body.from == my_pub && body.to.as_deref() == Some(&peer_id)) ||
+                              (body.from == peer_id && body.to.as_deref() == Some(&my_pub));
+            !is_with_peer
+        } else {
+            true // Keep unparseable blocks
+        }
+    });
+    
+    let deleted_count = original_count - chain.chain.len();
+    
+    // Save the updated blockchain
+    if let Err(e) = chain.save_to_file(&state.blockchain_path) {
+        warn!("Failed to save blockchain after deleting peer messages: {e}");
+        return Err(format!("Failed to save changes: {e}"));
+    }
+    
+    info!("Deleted {} messages with peer {}", deleted_count, peer_id);
+    let _ = state.app.emit("chat_update", ());
+    Ok(())
+}
+
+/// Delete all messages with a specific group
+#[tauri::command]
+async fn delete_group_messages(state: tauri::State<'_, AppState>, group_id: String) -> Result<(), String> {
+    let mut chain = state.blockchain.lock().await;
+    
+    // Filter out messages with this group
+    let original_count = chain.chain.len();
+    chain.chain.retain(|block| {
+        if let Ok(signed) = serde_json::from_str::<ChatSigned>(&block.data) {
+            // Check if this message is with the specified group
+            let is_with_group = signed.body.to.as_deref() == Some(&group_id);
+            !is_with_group
+        } else if let Ok(body) = serde_json::from_str::<ChatBody>(&block.data) {
+            // Check if this message is with the specified group
+            let is_with_group = body.to.as_deref() == Some(&group_id);
+            !is_with_group
+        } else {
+            true // Keep unparseable blocks
+        }
+    });
+    
+    let deleted_count = original_count - chain.chain.len();
+    
+    // Save the updated blockchain
+    if let Err(e) = chain.save_to_file(&state.blockchain_path) {
+        warn!("Failed to save blockchain after deleting group messages: {e}");
+        return Err(format!("Failed to save changes: {e}"));
+    }
+    
+    info!("Deleted {} messages with group {}", deleted_count, group_id);
+    let _ = state.app.emit("chat_update", ());
+    Ok(())
+}
+
+/// Delete a specific group entirely
+#[tauri::command]
+async fn delete_group(state: tauri::State<'_, AppState>, group_id: String) -> Result<(), String> {
+    // First delete all messages with this group
+    delete_group_messages(state.clone(), group_id.clone()).await?;
+    
+    // Then remove the group from the group manager
+    state.groups.delete_group(&group_id);
+    let _ = state.app.emit("group_update", ());
+    
+    info!("Deleted group {}", group_id);
+    Ok(())
+}
+
+/// Export all messages to JSON file for backup/analysis
+#[tauri::command]
+async fn export_messages_to_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let my_pub = state.identity.lock().await.public_key_b64.clone();
+    let chain = state.blockchain.lock().await;
+    
+    let mut export_data = Vec::new();
+    for block in &chain.chain {
+        if let Ok(signed) = serde_json::from_str::<ChatSigned>(&block.data) {
+            // Decrypt the message text for export
+            let mut decrypted_signed = signed.clone();
+            if let Some(decrypted_text) = decrypt_from_storage(&signed.body.text, &signed.body.from) {
+                decrypted_signed.body.text = decrypted_text;
+            }
+            
+            if decrypted_signed.body.from == my_pub
+                || decrypted_signed.body.to.as_deref() == Some(&my_pub)
+                || decrypted_signed
+                    .body
+                    .to
+                    .as_ref()
+                    .map(|gid| state.groups.is_member(gid, &my_pub))
+                    .unwrap_or(false)
+            {
+                export_data.push(decrypted_signed.body);
+            }
+        } else if let Ok(body) = serde_json::from_str::<ChatBody>(&block.data) {
+            // Decrypt the message text for export
+            let mut decrypted_body = body.clone();
+            if let Some(decrypted_text) = decrypt_from_storage(&body.text, &body.from) {
+                decrypted_body.text = decrypted_text;
+            }
+            
+            if decrypted_body.from == my_pub
+                || decrypted_body.to.as_deref() == Some(&my_pub)
+                || decrypted_body
+                    .to
+                    .as_ref()
+                    .map(|gid| state.groups.is_member(gid, &my_pub))
+                    .unwrap_or(false)
+            {
+                export_data.push(decrypted_body);
+            }
+        }
+    }
+    
+    // Create export filename with timestamp
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let export_filename = format!("wichain_messages_export_{}.json", timestamp);
+    let export_path = state.blockchain_path.parent().unwrap().join(&export_filename);
+    
+    // Write to file
+    let export_json = serde_json::to_string_pretty(&export_data)
+        .map_err(|e| format!("Failed to serialize export data: {}", e))?;
+    
+    fs::write(&export_path, export_json)
+        .map_err(|e| format!("Failed to write export file: {}", e))?;
+    
+    info!("Exported {} messages to {}", export_data.len(), export_filename);
+    Ok(export_filename)
+}
+
 /// Types for network status monitoring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkStatus {
@@ -1194,7 +1341,11 @@ fn main() {
             get_network_status,
             test_message_sending,
             run_comprehensive_tests,
-            force_tcp_connections
+            force_tcp_connections,
+            delete_peer_messages,
+            delete_group_messages,
+            delete_group,
+            export_messages_to_json
         ])
         .run(tauri::generate_context!())
         .expect("Error running WiChain");

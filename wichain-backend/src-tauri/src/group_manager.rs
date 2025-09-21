@@ -85,4 +85,10 @@ impl GroupManager {
             .map(|g| g.members.iter().any(|m| m == member))
             .unwrap_or(false)
     }
+
+    /// Delete a group by ID.
+    pub fn delete_group(&self, gid: &str) -> bool {
+        let mut guard = self.inner.lock().unwrap();
+        guard.remove(gid).is_some()
+    }
 }

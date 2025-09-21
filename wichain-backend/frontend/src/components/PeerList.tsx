@@ -3,9 +3,12 @@ import {
   MessageCircle, 
   Users, 
   MoreVertical,
-  Pin
+  Pin,
+  Trash2,
+  X
 } from 'lucide-react';
 import type { PeerInfo, GroupInfo } from '../lib/api';
+import { apiDeletePeerMessages, apiDeleteGroup } from '../lib/api';
 
 interface Props {
   peers: PeerInfo[];
@@ -16,6 +19,8 @@ interface Props {
   onSelectPeer: (id: string) => void;
   onSelectGroup: (id: string) => void;
   messages: any[]; // Add messages prop to get real latest messages
+  onDeletePeer?: (id: string) => void;
+  onDeleteGroup?: (id: string) => void;
 }
 
 export function PeerList({ 
@@ -26,7 +31,9 @@ export function PeerList({
   selected, 
   onSelectPeer, 
   onSelectGroup,
-  messages
+  messages,
+  onDeletePeer,
+  onDeleteGroup
 }: Props) {
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -82,6 +89,28 @@ export function PeerList({
     return { color: 'bg-green-500', text: 'Online' };
   };
 
+  const handleDeletePeer = async (peerId: string, peerAlias: string) => {
+    if (window.confirm(`Are you sure you want to delete all messages with ${peerAlias}? This action cannot be undone.`)) {
+      const success = await apiDeletePeerMessages(peerId);
+      if (success) {
+        onDeletePeer?.(peerId);
+      } else {
+        alert('Failed to delete messages. Please try again.');
+      }
+    }
+  };
+
+  const handleDeleteGroup = async (groupId: string, groupName: string) => {
+    if (window.confirm(`Are you sure you want to delete the group "${groupName}" and all its messages? This action cannot be undone.`)) {
+      const success = await apiDeleteGroup(groupId);
+      if (success) {
+        onDeleteGroup?.(groupId);
+      } else {
+        alert('Failed to delete group. Please try again.');
+      }
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="space-y-1 p-2">
@@ -108,7 +137,7 @@ export function PeerList({
                 return (
                   <motion.div
                     key={peer.id}
-                    className={`p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                    className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
                       isSelected 
                         ? 'bg-blue-500/20 border border-blue-500/30' 
                         : 'hover:bg-slate-700/30'
@@ -142,8 +171,15 @@ export function PeerList({
                             <span className={`px-2 py-1 rounded-full text-xs ${status.color} text-white`}>
                               {status.text}
                             </span>
-                            <button className="text-slate-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                              <MoreVertical size={14} />
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeletePeer(peer.id, peer.alias);
+                              }}
+                              className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-900/20"
+                              title="Delete conversation"
+                            >
+                              <Trash2 size={14} />
                             </button>
                           </div>
                         </div>
@@ -194,7 +230,7 @@ export function PeerList({
                 return (
                   <motion.div
                     key={group.id}
-                    className={`p-3 rounded-xl cursor-pointer transition-all duration-200 ${
+                    className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
                       isSelected 
                         ? 'bg-blue-500/20 border border-blue-500/30' 
                         : 'hover:bg-slate-700/30'
@@ -230,8 +266,15 @@ export function PeerList({
                             <span className="px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded-full">
                               {group.members.length}
                             </span>
-                            <button className="text-slate-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                              <MoreVertical size={14} />
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteGroup(group.id, groupName);
+                              }}
+                              className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-900/20"
+                              title="Delete group"
+                            >
+                              <Trash2 size={14} />
                             </button>
                           </div>
                         </div>

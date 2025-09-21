@@ -11,6 +11,9 @@ import {
   apiCreateGroup,
   apiListGroups,
   apiGetWifiName,
+  apiDeletePeerMessages,
+  apiDeleteGroup,
+  apiExportMessagesToJson,
   type Identity,
   type PeerInfo,
   type ChatBody,
@@ -448,6 +451,43 @@ export default function App() {
     }
   }, [target, refreshMessages]);
 
+  // Delete peer messages
+  const handleDeletePeer = useCallback(async (peerId: string) => {
+    const success = await apiDeletePeerMessages(peerId);
+    if (success) {
+      refreshMessages();
+      refreshPeers();
+      // If the deleted peer was selected, clear selection
+      if (target?.kind === 'peer' && target.id === peerId) {
+        setTarget(null);
+      }
+    }
+  }, [target, refreshMessages, refreshPeers]);
+
+  // Delete group
+  const handleDeleteGroup = useCallback(async (groupId: string) => {
+    const success = await apiDeleteGroup(groupId);
+    if (success) {
+      refreshMessages();
+      refreshGroups();
+      // If the deleted group was selected, clear selection
+      if (target?.kind === 'group' && target.id === groupId) {
+        setTarget(null);
+      }
+    }
+  }, [target, refreshMessages, refreshGroups]);
+
+  // Export messages to JSON
+  const handleExportMessages = useCallback(async () => {
+    try {
+      const filename = await apiExportMessagesToJson();
+      alert(`Messages exported successfully to: ${filename}`);
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert('Failed to export messages. Please try again.');
+    }
+  }, []);
+
   // Resize handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -794,6 +834,8 @@ export default function App() {
                   setTarget({ kind: 'group', id });
                 }}
                 messages={messages}
+                onDeletePeer={handleDeletePeer}
+                onDeleteGroup={handleDeleteGroup}
               />
             </div>
           </div>
@@ -1050,6 +1092,14 @@ export default function App() {
                   }`} />
                 </button>
               </div>
+
+              {/* Export Messages */}
+              <button 
+                onClick={handleExportMessages}
+                className={`w-full p-3 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-100 hover:bg-gray-200'} transition-colors`}
+              >
+                <span className={darkMode ? 'text-slate-300' : 'text-gray-700'}>Export Messages to JSON</span>
+              </button>
 
               {/* Contact Admin */}
               <button className={`w-full p-3 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-100 hover:bg-gray-200'} transition-colors`}>

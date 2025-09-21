@@ -286,6 +286,53 @@ export async function apiGetNetworkStatus(): Promise<NetworkStatus> {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Delete Functions                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Delete all messages with a specific peer. */
+export async function apiDeletePeerMessages(peerId: string): Promise<boolean> {
+  try {
+    await invoke('delete_peer_messages', { peer_id: peerId });
+    return true;
+  } catch (err) {
+    console.error('delete_peer_messages failed', err);
+    return false;
+  }
+}
+
+/** Delete all messages with a specific group. */
+export async function apiDeleteGroupMessages(groupId: string): Promise<boolean> {
+  try {
+    await invoke('delete_group_messages', { group_id: groupId });
+    return true;
+  } catch (err) {
+    console.error('delete_group_messages failed', err);
+    return false;
+  }
+}
+
+/** Delete a group entirely (messages + group). */
+export async function apiDeleteGroup(groupId: string): Promise<boolean> {
+  try {
+    await invoke('delete_group', { group_id: groupId });
+    return true;
+  } catch (err) {
+    console.error('delete_group failed', err);
+    return false;
+  }
+}
+
+/** Export all messages to JSON file. */
+export async function apiExportMessagesToJson(): Promise<string> {
+  try {
+    return await invoke<string>('export_messages_to_json');
+  } catch (err) {
+    console.error('export_messages_to_json failed', err);
+    throw new Error('Failed to export messages');
+  }
+}
+
 /** Test message sending with detailed logging. */
 export async function apiTestMessageSending(peerId: string, testMessage: string): Promise<string> {
   try {
