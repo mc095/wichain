@@ -1105,7 +1105,8 @@ fn main() {
                             | NetworkMessage::TcpConnectionResponse { .. }
                             | NetworkMessage::TcpKeepalive { .. }
                             | NetworkMessage::TcpConnectionTest { .. }
-                            | NetworkMessage::TcpConnectionTestResponse { .. } => {
+                            | NetworkMessage::TcpConnectionTestResponse { .. }
+                            | NetworkMessage::TcpHandshake { .. } => {
                                 // TCP connection management messages - handled by network layer
                                 let _ = app_handle_for_task.emit("peer_update", ());
                             }

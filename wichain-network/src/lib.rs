@@ -101,6 +101,13 @@ pub enum NetworkMessage {
         timestamp: u64,
         response_time_ms: u64,
     },
+
+    /// TCP handshake message to exchange peer identities.
+    TcpHandshake {
+        from: String,
+        from_alias: String,
+        pubkey: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -111,16 +118,17 @@ struct PeerEntry {
     tcp_port: Option<u16>,
 }
 
-/// TCP connection state for a peer.
-#[derive(Debug)]
-struct TcpConnection {
-    stream: Arc<Mutex<TokioTcpStream>>,
-    peer_id: String,
-    last_activity: Instant,
-    is_connected: bool,
-    message_count: u64,
-    last_test_time: Option<Instant>,
-}
+    /// TCP connection state for a peer.
+    #[derive(Debug)]
+    struct TcpConnection {
+        stream: Arc<Mutex<TokioTcpStream>>,
+        peer_id: String,
+        last_activity: Instant,
+        is_connected: bool,
+        message_count: u64,
+        last_test_time: Option<Instant>,
+        handshake_completed: bool,
+    }
 
 /// TCP connection manager.
 #[derive(Debug)]
@@ -206,10 +214,11 @@ impl NetworkNode {
             let peers = self.peers.clone();
             let my_id = self.id.clone();
             let my_alias = self.alias.clone();
+            let my_pubkey = self.pubkey.clone();
             let port = self.port;
             let tcp_manager = self.tcp_manager.clone();
             tokio::spawn(async move {
-                recv_loop(socket, tx, peers, my_id, my_alias, port, tcp_manager).await;
+                recv_loop(socket, tx, peers, my_id, my_alias, my_pubkey, port, tcp_manager).await;
             });
         }
 
@@ -230,9 +239,10 @@ impl NetworkNode {
             let tcp_manager = self.tcp_manager.clone();
             let node_id = self.id.clone();
             let alias = self.alias.clone();
+            let pubkey = self.pubkey.clone();
             let tx_tcp = tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = TcpConnectionManager::start_tcp_listener_static(tcp_manager, node_id, alias, tx_tcp).await {
+                if let Err(e) = TcpConnectionManager::start_tcp_listener_static(tcp_manager, node_id, alias, pubkey, tx_tcp).await {
                     error!("Failed to start TCP listener: {e:?}");
                 }
             });
@@ -338,7 +348,15 @@ impl NetworkNode {
         if let Some(conn) = connections.get(peer_id) {
             if conn.is_connected {
                 let mut stream = conn.stream.lock().await;
-                let message = format!("{}\n", payload);
+                
+                // Wrap payload in NetworkMessage::DirectBlock (same as UDP)
+                let wrapped_message = NetworkMessage::DirectBlock {
+                    from: self.id.clone(),
+                    to: peer_id.to_string(),
+                    payload_json: payload.to_string(),
+                };
+                
+                let message = format!("{}\n", serde_json::to_string(&wrapped_message)?);
                 
                 // Use timeout for TCP operations
                 let result = timeout(
@@ -375,7 +393,7 @@ impl NetworkNode {
             
             let request = NetworkMessage::TcpConnectionRequest {
                 from: self.id.clone(),
-                from_alias: alias,
+                from_alias: alias.clone(),
                 tcp_port,
             };
 
@@ -393,7 +411,19 @@ impl NetworkNode {
             if let Some(peer_tcp_port) = peer.tcp_port {
                 let peer_addr = format!("{}:{}", peer.last_addr.ip(), peer_tcp_port);
                 match TokioTcpStream::connect(&peer_addr).await {
-                    Ok(stream) => {
+                    Ok(mut stream) => {
+                        // Send handshake message
+                        let handshake = NetworkMessage::TcpHandshake {
+                            from: self.id.clone(),
+                            from_alias: alias,
+                            pubkey: self.pubkey.clone(),
+                        };
+                        
+                        let handshake_json = serde_json::to_string(&handshake)?;
+                        let handshake_msg = format!("{}\n", handshake_json);
+                        stream.write_all(handshake_msg.as_bytes()).await?;
+                        stream.flush().await?;
+                        
                         let conn = TcpConnection {
                             stream: Arc::new(Mutex::new(stream)),
                             peer_id: peer_id.to_string(),
@@ -401,12 +431,13 @@ impl NetworkNode {
                             is_connected: true,
                             message_count: 0,
                             last_test_time: None,
+                            handshake_completed: true,
                         };
                         
                         let mut connections = self.tcp_manager.connections.write().await;
                         connections.insert(peer_id.to_string(), conn);
                         
-                        info!("✅ TCP connection established to {} ({})", peer_id, peer.info.alias);
+                        info!("✅ TCP connection established to {} ({}) with handshake", peer_id, peer.info.alias);
                     }
                     Err(e) => {
                         warn!("Failed to establish TCP connection to {}: {}", peer_id, e);
@@ -486,6 +517,7 @@ impl TcpConnectionManager {
         tcp_manager: Arc<TcpConnectionManager>,
         _node_id: String,
         _alias: Arc<Mutex<String>>,
+        _pubkey: String,
         tx: mpsc::Sender<NetworkMessage>,
     ) -> anyhow::Result<()> {
         let bind_addr = format!("0.0.0.0:{}", tcp_manager.tcp_port);
@@ -498,14 +530,12 @@ impl TcpConnectionManager {
                 Ok((stream, addr)) => {
                     info!("New TCP connection from {}", addr);
                     
-                    let peer_id = format!("peer_{}", addr.port());
-                    
                     // Start reading messages from this TCP connection
+                    // We'll determine the real peer_id during handshake
                     let tx_clone = tx.clone();
                     let tcp_manager_clone = tcp_manager.clone();
-                    let peer_id_clone = peer_id.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_tcp_connection_reading(stream, peer_id_clone, tx_clone, tcp_manager_clone).await {
+                        if let Err(e) = Self::handle_tcp_connection_reading(stream, addr, tx_clone, tcp_manager_clone).await {
                             error!("TCP connection reading error: {e:?}");
                         }
                     });
@@ -522,17 +552,19 @@ impl TcpConnectionManager {
     /// Handle reading messages from a TCP connection.
     async fn handle_tcp_connection_reading(
         mut stream: TokioTcpStream,
-        peer_id: String,
+        addr: SocketAddr,
         tx: mpsc::Sender<NetworkMessage>,
         tcp_manager: Arc<TcpConnectionManager>,
     ) -> anyhow::Result<()> {
         let mut buffer = String::new();
         let mut read_buf = vec![0u8; 4096];
+        let mut peer_id: Option<String> = None;
+        let mut handshake_completed = false;
         
         loop {
             match stream.read(&mut read_buf).await {
                 Ok(0) => {
-                    info!("TCP connection closed by peer {}", peer_id);
+                    info!("TCP connection closed by peer {}", addr);
                     break;
                 }
                 Ok(n) => {
@@ -547,38 +579,75 @@ impl TcpConnectionManager {
                         if !message.is_empty() {
                             // Try to parse as NetworkMessage
                             if let Ok(network_msg) = serde_json::from_str::<NetworkMessage>(&message) {
-                                info!("📨 TCP message received from {}: {:?}", peer_id, network_msg);
-                                
-                                // Send to main message handler
-                                if let Err(e) = tx.send(network_msg).await {
-                                    error!("Failed to send TCP message to handler: {}", e);
-                                }
-                                
-                                // Update connection activity
-                                {
-                                    let mut connections = tcp_manager.connections.write().await;
-                                    if let Some(conn) = connections.get_mut(&peer_id) {
-                                        conn.last_activity = Instant::now();
-                                        conn.message_count += 1;
+                                match &network_msg {
+                                    NetworkMessage::TcpHandshake { from, from_alias, pubkey: _ } => {
+                                        if !handshake_completed {
+                                            peer_id = Some(from.clone());
+                                            handshake_completed = true;
+                                            
+                                            info!("✅ TCP handshake completed with peer {} ({})", from, from_alias);
+                                            
+                                            // Note: We would send a handshake response here, but we need the node's identity
+                                            // This will be handled by the main application when it receives the handshake message
+                                        }
+                                    }
+                                    _ => {
+                                        if let Some(ref pid) = peer_id {
+                                            info!("📨 TCP message received from {}: {:?}", pid, network_msg);
+                                            
+                                            // Send to main message handler
+                                            if let Err(e) = tx.send(network_msg).await {
+                                                error!("Failed to send TCP message to handler: {}", e);
+                                            }
+                                            
+                                            // Update connection activity
+                                            {
+                                                let mut connections = tcp_manager.connections.write().await;
+                                                if let Some(conn) = connections.get_mut(pid) {
+                                                    conn.last_activity = Instant::now();
+                                                    conn.message_count += 1;
+                                                }
+                                            }
+                                        } else {
+                                            warn!("Received message before handshake completed from {}", addr);
+                                        }
                                     }
                                 }
                             } else {
-                                warn!("Failed to parse TCP message from {}: {}", peer_id, message);
+                                warn!("Failed to parse TCP message from {}: {}", addr, message);
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    error!("TCP read error from {}: {}", peer_id, e);
+                    error!("TCP read error from {}: {}", addr, e);
                     break;
                 }
             }
         }
         
+        // Store connection if handshake was completed
+        if let Some(ref pid) = peer_id {
+            if handshake_completed {
+                let conn = TcpConnection {
+                    stream: Arc::new(Mutex::new(stream)),
+                    peer_id: pid.clone(),
+                    last_activity: Instant::now(),
+                    is_connected: true,
+                    message_count: 0,
+                    last_test_time: None,
+                    handshake_completed: true,
+                };
+                
+                let mut connections = tcp_manager.connections.write().await;
+                connections.insert(pid.clone(), conn);
+            }
+        }
+        
         // Remove connection when done
-        {
+        if let Some(ref pid) = peer_id {
             let mut connections = tcp_manager.connections.write().await;
-            connections.remove(&peer_id);
+            connections.remove(pid);
         }
         
         Ok(())
@@ -597,6 +666,7 @@ impl TcpConnectionManager {
             is_connected: true,
             message_count: 0,
             last_test_time: None,
+            handshake_completed: false,
         };
 
         // Add to connections
@@ -630,6 +700,7 @@ async fn recv_loop(
     peers: Arc<Mutex<HashMap<String, PeerEntry>>>,
     my_id: String,
     my_alias: Arc<Mutex<String>>,
+    my_pubkey: String,
     _port: u16,
     tcp_manager: Arc<TcpConnectionManager>,
 ) {
@@ -691,7 +762,25 @@ async fn recv_loop(
                 if *accepted {
                     let peer_addr = format!("{}:{}", src.ip(), tcp_port);
                     match TokioTcpStream::connect(&peer_addr).await {
-                        Ok(stream) => {
+                        Ok(mut stream) => {
+                            // Send handshake message
+                            let handshake = NetworkMessage::TcpHandshake {
+                                from: my_id.clone(),
+                                from_alias: { my_alias.lock().await.clone() },
+                                pubkey: my_pubkey.clone(),
+                            };
+                            
+                            if let Ok(handshake_json) = serde_json::to_string(&handshake) {
+                                let handshake_msg = format!("{}\n", handshake_json);
+                                if let Err(e) = stream.write_all(handshake_msg.as_bytes()).await {
+                                    warn!("Failed to send handshake: {}", e);
+                                } else if let Err(e) = stream.flush().await {
+                                    warn!("Failed to flush handshake: {}", e);
+                                }
+                            } else {
+                                warn!("Failed to serialize handshake");
+                            }
+                            
                             let conn = TcpConnection {
                                 stream: Arc::new(Mutex::new(stream)),
                                 peer_id: from.clone(),
@@ -699,12 +788,13 @@ async fn recv_loop(
                                 is_connected: true,
                                 message_count: 0,
                                 last_test_time: None,
+                                handshake_completed: true,
                             };
                             
                             let mut connections = tcp_manager.connections.write().await;
                             connections.insert(from.clone(), conn);
                             
-                            info!("✅ TCP connection established to {} on port {}", from, tcp_port);
+                            info!("✅ TCP connection established to {} on port {} with handshake", from, tcp_port);
                         }
                         Err(e) => {
                             warn!("Failed to establish TCP connection to {} on port {}: {}", from, tcp_port, e);
@@ -722,6 +812,10 @@ async fn recv_loop(
             NetworkMessage::TcpConnectionTestResponse { from, to, timestamp, response_time_ms } => {
                 update_peer(&peers, from, from, from, src).await;
                 info!("TCP connection test response from {} to {}: {}ms", from, to, response_time_ms);
+            }
+            NetworkMessage::TcpHandshake { from, from_alias, pubkey } => {
+                update_peer(&peers, from, from_alias, pubkey, src).await;
+                info!("TCP handshake received from {} ({})", from, from_alias);
             }
             NetworkMessage::Block { .. } => {
                 // legacy ignore
