@@ -223,19 +223,45 @@ export function ChatView({
         {/* Content */}
         <div className="relative z-10 p-6 h-full flex items-end">
           <div className="flex items-center space-x-4">
-            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-4 ring-white/20 overflow-hidden">
+            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center ring-4 ring-white/20 overflow-hidden relative">
               {selectedTarget.kind === 'group' ? (
-                <img 
-                  src={getRandomGroupProfilePicture(selectedTarget.id)} 
-                  alt="Group" 
-                  className="w-full h-full object-cover"
-                />
+                <>
+                  <img 
+                    src={getRandomGroupProfilePicture(selectedTarget.id)} 
+                    alt="Group" 
+                    className="w-full h-full object-cover"
+                    onLoad={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      const fallback = target.nextElementSibling as HTMLElement;
+                      if (fallback) fallback.style.display = 'none';
+                    }}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                    }}
+                  />
+                  <span className="text-white text-xl font-bold absolute">G</span>
+                </>
               ) : (
-                <img 
-                  src={getRandomProfilePicture(selectedTarget.id)} 
-                  alt="User" 
-                  className="w-full h-full object-cover"
-                />
+                <>
+                  <img 
+                    src={getRandomProfilePicture(selectedTarget.id)} 
+                    alt="User" 
+                    className="w-full h-full object-cover"
+                    onLoad={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      const fallback = target.nextElementSibling as HTMLElement;
+                      if (fallback) fallback.style.display = 'none';
+                    }}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                    }}
+                  />
+                  <span className="text-white text-xl font-bold absolute">
+                    {(aliasMap[selectedTarget.id] || selectedTarget.id.slice(0, 8) + '...').charAt(0).toUpperCase()}
+                  </span>
+                </>
               )}
             </div>
             <div>

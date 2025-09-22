@@ -1172,10 +1172,6 @@ export default function App() {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Status:</span>
-                  <span className="text-sm text-green-400"></span>
-                </div>
-                <div className="flex justify-between">
                   <span className={`text-sm ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Joined:</span>
                   <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-800'}`}>
                     {new Date().toLocaleDateString()}

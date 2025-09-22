@@ -252,9 +252,6 @@ export function GroupModal({ open, onClose, peers, onCreateGroup }: Props) {
                           <h5 className="text-white font-medium text-sm truncate">
                             {peer.alias}
                           </h5>
-                          <p className="text-slate-400 text-xs">
-                            Last seen {peer.last_seen_ms ? new Date(peer.last_seen_ms).toLocaleDateString() : 'Unknown'}
-                          </p>
                         </div>
                         
                       </motion.div>
