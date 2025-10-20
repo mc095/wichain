@@ -20,6 +20,7 @@ import { ChatView } from './components/ChatView';
 import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
+import { AdvancedFeatures } from './components/AdvancedFeatures';
 import { isMobilePlatform, isTauriAvailable, getMockIdentity, shouldShowOnboarding, markOnboardingComplete } from './lib/mobile-detection';
 // Conditional Tauri import - won't crash on mobile
 let tauriListen: any = null;
@@ -43,7 +44,7 @@ import {
   X,
   BarChart3,
   Power,
-  Image,
+  Image as ImageIcon,
   Menu,
   Trash2
 } from 'lucide-react';
@@ -469,6 +470,92 @@ export default function App() {
       setSending(false);
     }
   }, [text, target, identity, refreshMessages, selectedImage]);
+
+  // 📍 LOCATION SHARING HANDLER
+  const handleLocationShare = useCallback((position: GeolocationPosition) => {
+    const locationData = {
+      type: 'location',
+      lat: position.coords.latitude,
+      lon: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      altitude: position.coords.altitude,
+      timestamp: position.timestamp
+    };
+    
+    const locationMessage = `📍 Location Shared\nLat: ${locationData.lat.toFixed(6)}, Lon: ${locationData.lon.toFixed(6)}\nGoogle Maps: https://www.google.com/maps?q=${locationData.lat},${locationData.lon}\n[LOCATION_DATA:${JSON.stringify(locationData)}]`;
+    
+    if (target?.kind === 'peer') {
+      apiAddPeerMessage(locationMessage, target.id).then(() => refreshMessages());
+    } else if (target?.kind === 'group') {
+      apiAddGroupMessage(locationMessage, target.id).then(() => refreshMessages());
+    }
+  }, [target, refreshMessages]);
+
+  // 🎤 VOICE MESSAGE HANDLER
+  const handleVoiceMessage = useCallback(async (audioBlob: Blob, duration: number) => {
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const voiceData = {
+        type: 'voice',
+        duration,
+        audioData: reader.result as string,
+        timestamp: Date.now()
+      };
+      
+      const voiceMessage = `🎤 Voice Message (${duration}s)\n[VOICE_DATA:${JSON.stringify(voiceData)}]`;
+      
+      if (target?.kind === 'peer') {
+        await apiAddPeerMessage(voiceMessage, target.id);
+      } else if (target?.kind === 'group') {
+        await apiAddGroupMessage(voiceMessage, target.id);
+      }
+      refreshMessages();
+    };
+    reader.readAsDataURL(audioBlob);
+  }, [target, refreshMessages]);
+
+  // 📁 FILE SHARING HANDLER
+  const handleFileShare = useCallback(async (file: File) => {
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const fileData = {
+        type: 'file',
+        filename: file.name,
+        mimeType: file.type,
+        size: file.size,
+        data: reader.result as string
+      };
+      
+      const fileMessage = `📁 File: ${file.name} (${Math.round(file.size / 1024)}KB)\n[FILE_DATA:${JSON.stringify(fileData)}]`;
+      
+      if (target?.kind === 'peer') {
+        await apiAddPeerMessage(fileMessage, target.id);
+      } else if (target?.kind === 'group') {
+        await apiAddGroupMessage(fileMessage, target.id);
+      }
+      refreshMessages();
+    };
+    reader.readAsDataURL(file);
+  }, [target, refreshMessages]);
+
+  // 📸 SCREENSHOT HANDLER
+  const handleScreenshot = useCallback(async (imageData: string) => {
+    const screenshotData = {
+      type: 'image',
+      data: imageData,
+      filename: `screenshot-${Date.now()}.jpg`,
+      timestamp: Date.now()
+    };
+    
+    const screenshotMessage = `📸 Screenshot\n[IMAGE_DATA:${JSON.stringify(screenshotData)}]`;
+    
+    if (target?.kind === 'peer') {
+      await apiAddPeerMessage(screenshotMessage, target.id);
+    } else if (target?.kind === 'group') {
+      await apiAddGroupMessage(screenshotMessage, target.id);
+    }
+    refreshMessages();
+  }, [target, refreshMessages]);
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -999,7 +1086,17 @@ export default function App() {
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.3 }}
             >
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
+                {/* 🚀 ADVANCED FEATURES - Location, Voice, Files, Screenshots */}
+                <AdvancedFeatures
+                  onSendLocation={handleLocationShare}
+                  onSendVoice={handleVoiceMessage}
+                  onSendFile={handleFileShare}
+                  onSendScreenshot={handleScreenshot}
+                  darkMode={darkMode}
+                />
+
+                {/* Original Image Upload */}
                 <input
                   type="file"
                   accept="image/*"
@@ -1012,7 +1109,7 @@ export default function App() {
                   className={`p-2 rounded-lg transition-colors cursor-pointer ${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'}`}
                   title="Attach Image"
                 >
-                  <Image size={16} />
+                  <ImageIcon size={20} />
                 </label>
                 <input
                   type="text"

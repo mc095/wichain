@@ -3,7 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   User, 
   CheckCheck,
-  ArrowDown
+  ArrowDown,
+  MapPin,
+  Mic,
+  File as FileIcon,
+  Download
 } from 'lucide-react';
 import type { ChatBody, GroupInfo } from '../lib/api';
 import { getRandomProfilePicture, getRandomGroupProfilePicture } from '../utils/profilePictures';
@@ -362,7 +366,142 @@ export function ChatView({
                               transition={{ type: "spring", stiffness: 400 }}
                             >
                               {(() => {
-                                // Check if message contains image data
+                                // 📍 LOCATION DATA
+                                const locationMatch = message.text.match(/\[LOCATION_DATA:(.+?)\]/);
+                                if (locationMatch) {
+                                  try {
+                                    const locationData = JSON.parse(locationMatch[1]);
+                                    const textWithoutLocation = message.text.replace(/\[LOCATION_DATA:.+?\]/, '').trim();
+                                    
+                                    return (
+                                      <motion.div 
+                                        className="space-y-2"
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ duration: 0.3 }}
+                                      >
+                                        {textWithoutLocation && (
+                                          <p className="text-sm leading-relaxed whitespace-pre-wrap">{textWithoutLocation}</p>
+                                        )}
+                                        <motion.div 
+                                          className="bg-slate-900/50 rounded-lg p-3 border border-green-500/30"
+                                          whileHover={{ scale: 1.02 }}
+                                          transition={{ type: "spring", stiffness: 300 }}
+                                        >
+                                          <div className="flex items-center space-x-2 mb-2">
+                                            <MapPin size={16} className="text-green-400" />
+                                            <span className="text-xs text-green-400 font-semibold">Location Shared</span>
+                                          </div>
+                                          <div className="text-xs space-y-1 text-white/80">
+                                            <div>📍 {locationData.lat.toFixed(6)}, {locationData.lon.toFixed(6)}</div>
+                                            {locationData.accuracy && (
+                                              <div>🎯 Accuracy: ±{Math.round(locationData.accuracy)}m</div>
+                                            )}
+                                          </div>
+                                          <a 
+                                            href={`https://www.google.com/maps?q=${locationData.lat},${locationData.lon}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="mt-2 inline-block px-3 py-1.5 bg-green-600 hover:bg-green-700 rounded text-xs font-medium transition-all duration-200"
+                                          >
+                                            🗺️ Open in Maps
+                                          </a>
+                                        </motion.div>
+                                      </motion.div>
+                                    );
+                                  } catch (error) {
+                                    console.error('Error parsing location:', error);
+                                  }
+                                }
+                                
+                                // 🎤 VOICE DATA
+                                const voiceMatch = message.text.match(/\[VOICE_DATA:(.+?)\]/);
+                                if (voiceMatch) {
+                                  try {
+                                    const voiceData = JSON.parse(voiceMatch[1]);
+                                    const textWithoutVoice = message.text.replace(/\[VOICE_DATA:.+?\]/, '').trim();
+                                    
+                                    return (
+                                      <motion.div 
+                                        className="space-y-2"
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ duration: 0.3 }}
+                                      >
+                                        {textWithoutVoice && (
+                                          <p className="text-sm leading-relaxed">{textWithoutVoice}</p>
+                                        )}
+                                        <motion.div 
+                                          className="bg-slate-900/50 rounded-lg p-3 border border-blue-500/30"
+                                          whileHover={{ scale: 1.02 }}
+                                          transition={{ type: "spring", stiffness: 300 }}
+                                        >
+                                          <div className="flex items-center space-x-2 mb-2">
+                                            <Mic size={16} className="text-blue-400" />
+                                            <span className="text-xs text-blue-400 font-semibold">Voice Message ({voiceData.duration}s)</span>
+                                          </div>
+                                          <audio 
+                                            controls 
+                                            className="w-full h-10 rounded"
+                                            style={{ filter: isMe ? 'invert(0.1)' : 'invert(1) hue-rotate(180deg)' }}
+                                            src={voiceData.audioData}
+                                          />
+                                        </motion.div>
+                                      </motion.div>
+                                    );
+                                  } catch (error) {
+                                    console.error('Error parsing voice:', error);
+                                  }
+                                }
+                                
+                                // 📁 FILE DATA
+                                const fileMatch = message.text.match(/\[FILE_DATA:(.+?)\]/);
+                                if (fileMatch) {
+                                  try {
+                                    const fileData = JSON.parse(fileMatch[1]);
+                                    const textWithoutFile = message.text.replace(/\[FILE_DATA:.+?\]/, '').trim();
+                                    
+                                    return (
+                                      <motion.div 
+                                        className="space-y-2"
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ duration: 0.3 }}
+                                      >
+                                        {textWithoutFile && (
+                                          <p className="text-sm leading-relaxed">{textWithoutFile}</p>
+                                        )}
+                                        <motion.div 
+                                          className="bg-slate-900/50 rounded-lg p-3 border border-purple-500/30"
+                                          whileHover={{ scale: 1.02 }}
+                                          transition={{ type: "spring", stiffness: 300 }}
+                                        >
+                                          <div className="flex items-center space-x-2 mb-2">
+                                            <FileIcon size={16} className="text-purple-400" />
+                                            <span className="text-xs text-purple-400 font-semibold">File Attachment</span>
+                                          </div>
+                                          <div className="text-xs space-y-1 text-white/80 mb-2">
+                                            <div>📄 {fileData.filename}</div>
+                                            <div>💾 {Math.round(fileData.size / 1024)}KB</div>
+                                            {fileData.mimeType && <div>📋 {fileData.mimeType}</div>}
+                                          </div>
+                                          <a 
+                                            href={fileData.data}
+                                            download={fileData.filename}
+                                            className="inline-flex items-center space-x-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 rounded text-xs font-medium transition-all duration-200"
+                                          >
+                                            <Download size={12} />
+                                            <span>Download</span>
+                                          </a>
+                                        </motion.div>
+                                      </motion.div>
+                                    );
+                                  } catch (error) {
+                                    console.error('Error parsing file:', error);
+                                  }
+                                }
+                                
+                                // 📸 IMAGE DATA (EXISTING)
                                 const imageMatch = message.text.match(/\[IMAGE_DATA:(.+?)\]/);
                                 if (imageMatch) {
                                   try {
@@ -370,17 +509,25 @@ export function ChatView({
                                     const textWithoutImage = message.text.replace(/\[IMAGE_DATA:.+?\]/, '').trim();
                                     
                                     return (
-                                      <div className="space-y-2">
+                                      <motion.div 
+                                        className="space-y-2"
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        transition={{ duration: 0.3 }}
+                                      >
                                         {textWithoutImage && (
                                           <p className="text-sm leading-relaxed">{textWithoutImage}</p>
                                         )}
-                                        <div className="relative">
+                                        <motion.div 
+                                          className="relative"
+                                          whileHover={{ scale: 1.02 }}
+                                          transition={{ type: "spring", stiffness: 300 }}
+                                        >
                                           <img 
                                             src={imageData.data} 
                                             alt={imageData.filename}
                                             className="max-w-xs max-h-64 rounded-lg object-cover cursor-pointer hover:opacity-90 transition-opacity"
                                             onClick={() => {
-                                              // Open image in new tab
                                               const newWindow = window.open();
                                               if (newWindow) {
                                                 newWindow.document.write(`
@@ -397,20 +544,21 @@ export function ChatView({
                                           <div className="text-xs text-white/70 mt-1">
                                             📷 {imageData.filename} 
                                             {imageData.compressedSize ? 
-                                              ` (${Math.round(imageData.compressedSize / 1024)}KB compressed from ${Math.round(imageData.originalSize / 1024)}KB)` :
-                                              ` (${Math.round(imageData.size / 1024)}KB)`
+                                              ` (${Math.round(imageData.compressedSize / 1024)}KB)` :
+                                              ` (${imageData.size ? Math.round(imageData.size / 1024) : '?'}KB)`
                                             }
                                           </div>
-                                        </div>
-                                      </div>
+                                        </motion.div>
+                                      </motion.div>
                                     );
                                   } catch (error) {
-                                    console.error('Error parsing image data:', error);
+                                    console.error('Error parsing image:', error);
                                     return <p className="text-sm leading-relaxed">{message.text}</p>;
                                   }
                                 }
                                 
-                                return <p className="text-sm leading-relaxed">{message.text}</p>;
+                                // Regular text message
+                                return <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.text}</p>;
                               })()}
                             </motion.div>
                             
