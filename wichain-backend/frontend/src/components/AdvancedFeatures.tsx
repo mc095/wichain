@@ -2,26 +2,28 @@
 // Location Sharing, Voice Messages, File Sharing, Screen Capture & MORE!
 
 import { useState, useRef, useCallback } from 'react';
-import { MapPin, Mic, File, Camera, Monitor, Video, Zap, Shield } from 'lucide-react';
+import { Mic, File, Camera, Monitor, Video, AlertTriangle, Flame, Shield } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface AdvancedFeaturesProps {
-  onSendLocation: (location: GeolocationPosition) => void;
   onSendVoice: (audioBlob: Blob, duration: number) => void;
   onSendFile: (file: File) => void;
   onSendScreenshot: (imageData: string) => void;
   onSendPhoto: (imageData: string) => void;
   onStartVideoCall?: () => void;
+  onSendSOS?: () => void;
+  onSendEmergencyBroadcast?: () => void;
   darkMode?: boolean;
 }
 
 export function AdvancedFeatures({ 
-  onSendLocation, 
   onSendVoice, 
   onSendFile,
   onSendScreenshot,
   onSendPhoto,
   onStartVideoCall,
+  onSendSOS,
+  onSendEmergencyBroadcast,
   darkMode = true 
 }: AdvancedFeaturesProps) {
   const [isRecording, setIsRecording] = useState(false);
@@ -30,54 +32,19 @@ export function AdvancedFeatures({
   const audioChunksRef = useRef<Blob[]>([]);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 📍 DEVICE GPS LOCATION SHARING (NOT IP-BASED!)
-  const shareLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      alert('❌ Geolocation not supported by your browser!');
-      return;
+  // 🚨 SOS EMERGENCY ALERT (FOR CRISIS/WARZONE!)
+  const sendSOSAlert = useCallback(() => {
+    if (onSendSOS) {
+      onSendSOS();
     }
+  }, [onSendSOS]);
 
-    // Request permission first
-    if (navigator.permissions) {
-      navigator.permissions.query({ name: 'geolocation' }).then((result) => {
-        console.log('📍 Geolocation permission:', result.state);
-      });
+  // 📢 EMERGENCY BROADCAST (FOR TEAM ALERTS!)
+  const sendEmergencyBroadcast = useCallback(() => {
+    if (onSendEmergencyBroadcast) {
+      onSendEmergencyBroadcast();
     }
-
-    // FORCE device GPS with high accuracy
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        console.log('✅ GPS Position:', position.coords);
-        console.log('📍 Accuracy:', position.coords.accuracy, 'meters');
-        console.log('🛰️ Altitude:', position.coords.altitude, 'meters');
-        console.log('⚡ Speed:', position.coords.speed, 'm/s');
-        
-        onSendLocation(position);
-        alert(`✅ GPS Location Shared!\nLat: ${position.coords.latitude.toFixed(6)}\nLon: ${position.coords.longitude.toFixed(6)}\nAccuracy: ±${Math.round(position.coords.accuracy)}m`);
-      },
-      (error) => {
-        console.error('❌ Geolocation error:', error);
-        let errorMsg = 'Failed to get GPS location: ';
-        switch(error.code) {
-          case error.PERMISSION_DENIED:
-            errorMsg += 'Permission denied! Please allow location access.';
-            break;
-          case error.POSITION_UNAVAILABLE:
-            errorMsg += 'GPS unavailable! Make sure GPS is enabled.';
-            break;
-          case error.TIMEOUT:
-            errorMsg += 'GPS timeout! Taking too long to get position.';
-            break;
-        }
-        alert(`❌ ${errorMsg}`);
-      },
-      {
-        enableHighAccuracy: true,  // FORCE GPS, not WiFi/IP
-        timeout: 30000,            // 30 seconds for GPS to lock
-        maximumAge: 0              // Don't use cached location
-      }
-    );
-  }, [onSendLocation]);
+  }, [onSendEmergencyBroadcast]);
 
   // 📷 CAMERA PHOTO CAPTURE (NOT SCREENSHOT!)
   const capturePhoto = useCallback(async () => {
@@ -225,20 +192,39 @@ export function AdvancedFeatures({
 
   return (
     <div className="flex items-center space-x-2">
-      {/* Location Share Button */}
-      <motion.button
-        onClick={shareLocation}
-        className={`p-2 rounded-lg transition-colors ${
-          darkMode 
-            ? 'text-green-400 hover:text-green-300 hover:bg-green-900/20' 
-            : 'text-green-600 hover:text-green-500 hover:bg-green-100'
-        }`}
-        title="Share Location 📍"
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.95 }}
-      >
-        <MapPin size={20} />
-      </motion.button>
+      {/* 🚨 SOS EMERGENCY BUTTON (CRISIS/WARZONE) */}
+      {onSendSOS && (
+        <motion.button
+          onClick={sendSOSAlert}
+          className={`p-2 rounded-lg transition-colors ${
+            darkMode 
+              ? 'text-red-400 hover:text-red-300 hover:bg-red-900/30 border border-red-500/50' 
+              : 'text-red-600 hover:text-red-500 hover:bg-red-100 border border-red-300'
+          }`}
+          title="🚨 SEND SOS EMERGENCY ALERT!"
+          whileHover={{ scale: 1.15 }}
+          whileTap={{ scale: 0.9 }}
+        >
+          <AlertTriangle size={20} className="animate-pulse" />
+        </motion.button>
+      )}
+
+      {/* 📢 EMERGENCY BROADCAST (TEAM ALERT) */}
+      {onSendEmergencyBroadcast && (
+        <motion.button
+          onClick={sendEmergencyBroadcast}
+          className={`p-2 rounded-lg transition-colors ${
+            darkMode 
+              ? 'text-yellow-400 hover:text-yellow-300 hover:bg-yellow-900/30' 
+              : 'text-yellow-600 hover:text-yellow-500 hover:bg-yellow-100'
+          }`}
+          title="📢 Emergency Broadcast to All!"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.95 }}
+        >
+          <Flame size={20} />
+        </motion.button>
+      )}
 
       {/* Voice Message Button */}
       <motion.button
@@ -427,8 +413,7 @@ export function DisappearingTimer({ expiresIn }: { expiresIn: number }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
     >
-      <Zap size={12} />
-      <span>Expires in {expiresIn}s</span>
+      <span>⏱️ Expires in {expiresIn}s</span>
       <div className="w-20 h-1 bg-slate-700 rounded-full overflow-hidden">
         <motion.div
           className="h-full bg-yellow-400"

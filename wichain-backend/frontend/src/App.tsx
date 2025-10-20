@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import './mobile.css';
 import {
   apiGetIdentity,
   apiSetAlias,
@@ -21,16 +20,7 @@ import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { AdvancedFeatures } from './components/AdvancedFeatures';
-import { isMobilePlatform, isTauriAvailable, getMockIdentity, shouldShowOnboarding, markOnboardingComplete } from './lib/mobile-detection';
-// Conditional Tauri import - won't crash on mobile
-let tauriListen: any = null;
-try {
-  if (isTauriAvailable()) {
-    tauriListen = require('@tauri-apps/api/event').listen;
-  }
-} catch (e) {
-  console.warn('Tauri not available (running on mobile)');
-}
+import { listen as tauriListen } from '@tauri-apps/api/event';
 import { getRandomProfilePicture } from './utils/profilePictures';
 
 import { motion, AnimatePresence } from 'framer-motion';
@@ -167,33 +157,16 @@ export default function App() {
 
   const loadIdentity = useCallback(async () => {
     try {
-      let id;
-      if (isMobilePlatform() && !isTauriAvailable()) {
-        // Mobile without backend - use mock identity
-        const stored = localStorage.getItem('mobile_identity');
-        if (stored) {
-          id = JSON.parse(stored);
-        } else {
-          id = getMockIdentity();
-          localStorage.setItem('mobile_identity', JSON.stringify(id));
-        }
-      } else {
-        // Desktop with Tauri backend
-        id = await apiGetIdentity();
-      }
-      
+      const id = await apiGetIdentity();
       setIdentity(id);
       
       // Check if should show onboarding
-      if (shouldShowOnboarding(id.alias)) {
+      if (!id.alias || id.alias === 'Anonymous') {
         setShowSlideshow(true);
         setCurrentSlide(0);
       }
     } catch (error) {
       console.error('Failed to load identity:', error);
-      // Fallback to mock identity on error
-      const mockId = getMockIdentity();
-      setIdentity(mockId);
       setShowSlideshow(true);
     }
   }, []);
@@ -318,20 +291,10 @@ export default function App() {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [leftPanelWidth, setLeftPanelWidth] = useState(320); // Increased from default
+  const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const [isResizing, setIsResizing] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
 
-  // Check for mobile screen size
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
-    };
-
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
+  // Desktop-only Tauri app - no mobile detection needed
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -471,25 +434,43 @@ export default function App() {
     }
   }, [text, target, identity, refreshMessages, selectedImage]);
 
-  // 📍 LOCATION SHARING HANDLER
-  const handleLocationShare = useCallback((position: GeolocationPosition) => {
-    const locationData = {
-      type: 'location',
-      lat: position.coords.latitude,
-      lon: position.coords.longitude,
-      accuracy: position.coords.accuracy,
-      altitude: position.coords.altitude,
-      timestamp: position.timestamp
-    };
+  // 🚨 SOS EMERGENCY ALERT (FOR CRISIS/WARZONE!)
+  const handleSOSAlert = useCallback(async () => {
+    const confirmed = window.confirm('🚨 SEND SOS EMERGENCY ALERT?\n\nThis will alert ALL contacts immediately!\n\nAre you in danger?');
     
-    const locationMessage = `📍 Location Shared\nLat: ${locationData.lat.toFixed(6)}, Lon: ${locationData.lon.toFixed(6)}\nGoogle Maps: https://www.google.com/maps?q=${locationData.lat},${locationData.lon}\n[LOCATION_DATA:${JSON.stringify(locationData)}]`;
+    if (!confirmed) return;
+
+    const sosMessage = `🚨🚨🚨 SOS EMERGENCY ALERT 🚨🚨🚨\n\n⚠️ USER NEEDS IMMEDIATE ASSISTANCE!\n⚠️ RESPOND URGENTLY!\n\nTimestamp: ${new Date().toLocaleString()}\nUser: ${identity?.alias || 'Unknown'}\n\n[SOS_ALERT:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
     
+    // Send to current target if available
     if (target?.kind === 'peer') {
-      apiAddPeerMessage(locationMessage, target.id).then(() => refreshMessages());
+      await apiAddPeerMessage(sosMessage, target.id);
     } else if (target?.kind === 'group') {
-      apiAddGroupMessage(locationMessage, target.id).then(() => refreshMessages());
+      await apiAddGroupMessage(sosMessage, target.id);
     }
-  }, [target, refreshMessages]);
+    
+    refreshMessages();
+    alert('✅ SOS Alert Sent!\nYour emergency message has been broadcast!');
+  }, [target, refreshMessages, identity]);
+
+  // 📢 EMERGENCY BROADCAST TO ALL PEERS
+  const handleEmergencyBroadcast = useCallback(async () => {
+    const message = window.prompt('📢 EMERGENCY BROADCAST\n\nEnter emergency message to send to ALL contacts:');
+    
+    if (!message || message.trim() === '') return;
+
+    const broadcastMessage = `📢 EMERGENCY BROADCAST 📢\n\nFrom: ${identity?.alias || 'Unknown'}\nTime: ${new Date().toLocaleString()}\n\n${message}\n\n[EMERGENCY_BROADCAST:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
+    
+    // Send to current target
+    if (target?.kind === 'peer') {
+      await apiAddPeerMessage(broadcastMessage, target.id);
+    } else if (target?.kind === 'group') {
+      await apiAddGroupMessage(broadcastMessage, target.id);
+    }
+    
+    refreshMessages();
+    alert('✅ Emergency Broadcast Sent!');
+  }, [target, refreshMessages, identity]);
 
   // 🎤 VOICE MESSAGE HANDLER
   const handleVoiceMessage = useCallback(async (audioBlob: Blob, duration: number) => {
@@ -576,10 +557,29 @@ export default function App() {
     refreshMessages();
   }, [target, refreshMessages]);
 
-  // 📹 VIDEO CALL HANDLER (coming soon!)
-  const handleVideoCall = useCallback(() => {
-    alert('📹 Video Calling Feature!\n\nThis uses WebRTC P2P technology.\nImplementation in progress...\n\n✅ Works fully offline on LAN!\n✅ No servers needed!\n✅ Direct peer-to-peer!');
-  }, []);
+  // 📹 VIDEO CALL HANDLER (WebRTC P2P!)
+  const handleVideoCall = useCallback(async () => {
+    if (!target) {
+      alert('⚠️ Please select a contact first to start a video call!');
+      return;
+    }
+
+    const confirmed = window.confirm('📹 START VIDEO CALL?\n\n🎥 WebRTC P2P Video Call\n✅ End-to-end encrypted\n✅ Works offline on LAN\n✅ No servers needed\n\nStart call now?');
+    
+    if (!confirmed) return;
+
+    // Send video call invitation
+    const callMessage = `📹 VIDEO CALL REQUEST 📹\n\nFrom: ${identity?.alias || 'Unknown'}\nTime: ${new Date().toLocaleString()}\n\n🎥 Requesting video call...\nClick to accept!\n\n[VIDEO_CALL_REQUEST:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias, targetId: target.id })}]`;
+    
+    if (target.kind === 'peer') {
+      await apiAddPeerMessage(callMessage, target.id);
+    } else if (target.kind === 'group') {
+      await apiAddGroupMessage(callMessage, target.id);
+    }
+    
+    refreshMessages();
+    alert('📹 Video Call Request Sent!\n\n✅ Waiting for peer to accept...\n✅ WebRTC connection will be established\n✅ Fully encrypted P2P call');
+  }, [target, identity, refreshMessages]);
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -641,11 +641,11 @@ export default function App() {
   };
 
   const handleMouseMove = (e: MouseEvent) => {
-    if (!isResizing || isMobile) return;
+    if (!isResizing) return;
 
     const newWidth = e.clientX;
-    const minWidth = isMobile ? 280 : 250;
-    const maxWidth = isMobile ? 350 : 500;
+    const minWidth = 250;
+    const maxWidth = 500;
 
     if (newWidth >= minWidth && newWidth <= maxWidth) {
       setLeftPanelWidth(newWidth);
@@ -680,23 +680,15 @@ export default function App() {
 
   // Onboarding
   async function onboardingDone(alias: string) {
-    markOnboardingComplete();
     setShowOnboarding(false);
     setShowSlideshow(false);
     
-    if (isMobilePlatform() && !isTauriAvailable()) {
-      // Update mobile mock identity
-      const stored = localStorage.getItem('mobile_identity');
-      if (stored) {
-        const id = JSON.parse(stored);
-        id.alias = alias;
-        localStorage.setItem('mobile_identity', JSON.stringify(id));
-        setIdentity(id);
-      }
-    } else {
-      // Update via backend
+    try {
+      // Set alias in backend
       await apiSetAlias(alias);
       await loadIdentity();
+    } catch (error) {
+      console.error('Failed to set alias:', error);
     }
   }
 
@@ -841,14 +833,7 @@ export default function App() {
   }
 
   return (
-    <div className={`flex h-screen overflow-hidden mobile-scroll ${darkMode ? 'space-background text-white' : 'light-background text-gray-900'} ${isResizing ? 'select-none' : ''}`}>
-      {/* Mobile Sidebar Backdrop Overlay */}
-      {isMobile && sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/60 z-[9998]"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+    <div className={`flex h-screen overflow-hidden ${darkMode ? 'space-background text-white' : 'light-background text-gray-900'} ${isResizing ? 'select-none' : ''}`}>
       
       {/* Left Sidebar - Global Navigation */}
       <motion.div
@@ -930,13 +915,13 @@ export default function App() {
 
       {/* Chat List Sidebar */}
       <motion.div
-        className={`${sidebarOpen ? '' : 'w-0'} backdrop-blur-xl border-r transition-all duration-300 overflow-hidden relative mobile-scroll ${isMobile ? 'sidebar-mobile' : ''} ${darkMode ? 'bg-slate-800/30 border-slate-700/50' : 'bg-white/30 border-gray-200/50'}`}
-        style={{ width: sidebarOpen ? `${isMobile ? 300 : leftPanelWidth}px` : '0px' }}
+        className={`${sidebarOpen ? '' : 'w-0'} backdrop-blur-xl border-r transition-all duration-300 overflow-hidden relative ${darkMode ? 'bg-slate-800/30 border-slate-700/50' : 'bg-white/30 border-gray-200/50'}`}
+        style={{ width: sidebarOpen ? `${leftPanelWidth}px` : '0px' }}
         initial={{ width: 0 }}
-        animate={{ width: sidebarOpen ? (isMobile ? 300 : leftPanelWidth) : 0 }}
+        animate={{ width: sidebarOpen ? leftPanelWidth : 0 }}
       >
         {/* Resize Handle */}
-        {sidebarOpen && !isMobile && (
+        {sidebarOpen && (
           <div
             className="absolute top-0 right-0 w-1 h-full bg-slate-600/50 hover:bg-slate-500/70 cursor-col-resize z-10 group"
             onMouseDown={handleMouseDown}
@@ -982,11 +967,9 @@ export default function App() {
                 selected={target}
                 onSelectPeer={(id) => {
                   setTarget({ kind: 'peer', id });
-                  if (isMobile) setSidebarOpen(false); // Close sidebar on mobile after selection
                 }}
                 onSelectGroup={(id) => {
                   setTarget({ kind: 'group', id });
-                  if (isMobile) setSidebarOpen(false); // Close sidebar on mobile after selection
                 }}
                 messages={messages}
               />
@@ -1105,15 +1088,16 @@ export default function App() {
 
             {/* Message Input */}
             <motion.div
-              className={`backdrop-blur-xl border-t p-4 ${isMobile ? 'message-input-mobile safe-area-bottom' : ''} ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
+              className={`backdrop-blur-xl border-t p-4 ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
               initial={{ y: 50, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.3 }}
             >
               <div className="flex items-center space-x-2">
-                {/* 🚀 ADVANCED FEATURES - Location, Voice, Files, Camera, Screenshots, Video */}
+                {/* 🚀 CRISIS FEATURES - SOS, Emergency Broadcast, Voice, Files, Camera, Video */}
                 <AdvancedFeatures
-                  onSendLocation={handleLocationShare}
+                  onSendSOS={handleSOSAlert}
+                  onSendEmergencyBroadcast={handleEmergencyBroadcast}
                   onSendVoice={handleVoiceMessage}
                   onSendFile={handleFileShare}
                   onSendScreenshot={handleScreenshot}

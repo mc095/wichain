@@ -4,7 +4,6 @@ import {
   User, 
   CheckCheck,
   ArrowDown,
-  MapPin,
   Mic,
   File as FileIcon,
   Download
@@ -366,52 +365,91 @@ export function ChatView({
                               transition={{ type: "spring", stiffness: 400 }}
                             >
                               {(() => {
-                                // 📍 LOCATION DATA
-                                const locationMatch = message.text.match(/\[LOCATION_DATA:(.+?)\]/);
-                                if (locationMatch) {
-                                  try {
-                                    const locationData = JSON.parse(locationMatch[1]);
-                                    const textWithoutLocation = message.text.replace(/\[LOCATION_DATA:.+?\]/, '').trim();
-                                    
-                                    return (
+                                // 🚨 SOS EMERGENCY ALERT
+                                const sosMatch = message.text.match(/\[SOS_ALERT:(.+?)\]/);
+                                if (sosMatch) {
+                                  const textWithoutSOS = message.text.replace(/\[SOS_ALERT:.+?\]/, '').trim();
+                                  
+                                  return (
+                                    <motion.div 
+                                      className="space-y-2"
+                                      initial={{ opacity: 0, scale: 0.9 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{ duration: 0.4 }}
+                                    >
                                       <motion.div 
-                                        className="space-y-2"
-                                        initial={{ opacity: 0, scale: 0.95 }}
-                                        animate={{ opacity: 1, scale: 1 }}
-                                        transition={{ duration: 0.3 }}
+                                        className="bg-red-900/50 rounded-lg p-4 border-2 border-red-500 animate-pulse"
+                                        whileHover={{ scale: 1.03 }}
+                                        transition={{ type: "spring", stiffness: 300 }}
                                       >
-                                        {textWithoutLocation && (
-                                          <p className="text-sm leading-relaxed whitespace-pre-wrap">{textWithoutLocation}</p>
-                                        )}
-                                        <motion.div 
-                                          className="bg-slate-900/50 rounded-lg p-3 border border-green-500/30"
-                                          whileHover={{ scale: 1.02 }}
-                                          transition={{ type: "spring", stiffness: 300 }}
-                                        >
-                                          <div className="flex items-center space-x-2 mb-2">
-                                            <MapPin size={16} className="text-green-400" />
-                                            <span className="text-xs text-green-400 font-semibold">Location Shared</span>
-                                          </div>
-                                          <div className="text-xs space-y-1 text-white/80">
-                                            <div>📍 {locationData.lat.toFixed(6)}, {locationData.lon.toFixed(6)}</div>
-                                            {locationData.accuracy && (
-                                              <div>🎯 Accuracy: ±{Math.round(locationData.accuracy)}m</div>
-                                            )}
-                                          </div>
-                                          <a 
-                                            href={`https://www.google.com/maps?q=${locationData.lat},${locationData.lon}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="mt-2 inline-block px-3 py-1.5 bg-green-600 hover:bg-green-700 rounded text-xs font-medium transition-all duration-200"
-                                          >
-                                            🗺️ Open in Maps
-                                          </a>
-                                        </motion.div>
+                                        <div className="flex items-center space-x-2 mb-3">
+                                          <span className="text-2xl">🚨</span>
+                                          <span className="text-sm font-bold text-red-300">EMERGENCY SOS ALERT</span>
+                                        </div>
+                                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-white font-semibold">{textWithoutSOS}</p>
+                                        <div className="mt-3 p-2 bg-red-950/50 rounded text-xs text-red-200">
+                                          ⚠️ This user needs IMMEDIATE assistance!
+                                        </div>
                                       </motion.div>
-                                    );
-                                  } catch (error) {
-                                    console.error('Error parsing location:', error);
-                                  }
+                                    </motion.div>
+                                  );
+                                }
+                                
+                                // 📢 EMERGENCY BROADCAST
+                                const emergencyMatch = message.text.match(/\[EMERGENCY_BROADCAST:(.+?)\]/);
+                                if (emergencyMatch) {
+                                  const textWithoutEmergency = message.text.replace(/\[EMERGENCY_BROADCAST:.+?\]/, '').trim();
+                                  
+                                  return (
+                                    <motion.div 
+                                      className="space-y-2"
+                                      initial={{ opacity: 0, scale: 0.95 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{ duration: 0.3 }}
+                                    >
+                                      <motion.div 
+                                        className="bg-yellow-900/30 rounded-lg p-3 border border-yellow-500/50"
+                                        whileHover={{ scale: 1.02 }}
+                                        transition={{ type: "spring", stiffness: 300 }}
+                                      >
+                                        <div className="flex items-center space-x-2 mb-2">
+                                          <span className="text-xl">📢</span>
+                                          <span className="text-xs font-bold text-yellow-300">EMERGENCY BROADCAST</span>
+                                        </div>
+                                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-white">{textWithoutEmergency}</p>
+                                      </motion.div>
+                                    </motion.div>
+                                  );
+                                }
+
+                                // 📹 VIDEO CALL REQUEST
+                                const videoCallMatch = message.text.match(/\[VIDEO_CALL_REQUEST:(.+?)\]/);
+                                if (videoCallMatch) {
+                                  const textWithoutCall = message.text.replace(/\[VIDEO_CALL_REQUEST:.+?\]/, '').trim();
+                                  
+                                  return (
+                                    <motion.div 
+                                      className="space-y-2"
+                                      initial={{ opacity: 0, scale: 0.95 }}
+                                      animate={{ opacity: 1, scale: 1 }}
+                                      transition={{ duration: 0.3 }}
+                                    >
+                                      <motion.div 
+                                        className="bg-blue-900/30 rounded-lg p-3 border border-blue-500/50"
+                                        whileHover={{ scale: 1.02 }}
+                                        transition={{ type: "spring", stiffness: 300 }}
+                                      >
+                                        <div className="flex items-center space-x-2 mb-2">
+                                          <span className="text-xl">📹</span>
+                                          <span className="text-xs font-bold text-blue-300">VIDEO CALL REQUEST</span>
+                                        </div>
+                                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-white">{textWithoutCall}</p>
+                                        <div className="mt-2 text-xs text-blue-200">
+                                          🎥 WebRTC P2P • ✅ Encrypted • ✅ Offline LAN
+                                        </div>
+                                      </motion.div>
+                                    </motion.div>
+                                  );
                                 }
                                 
                                 // 🎤 VOICE DATA
