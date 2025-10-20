@@ -246,7 +246,7 @@ export default function App() {
 
   useEffect(() => {
     refreshPeers();
-    const interval = setInterval(refreshPeers, 5_000);
+    const interval = setInterval(refreshPeers, 2_000); // OPTIMIZED: 5s → 2s for faster peer updates
     
     // Only listen to Tauri events on desktop
     let unlistenPromise: any = null;
@@ -289,7 +289,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     refreshMessages();
-    const interval = setInterval(refreshMessages, 10_000);
+    const interval = setInterval(refreshMessages, 3_000); // OPTIMIZED: 10s → 3s for faster message delivery
     
     // Only listen to Tauri events on desktop
     let unlistenPromise: any = null;

@@ -21,13 +21,13 @@ use tokio::{
 };
 use tracing::{error, info, warn, debug};
 
-const BROADCAST_INTERVAL: Duration = Duration::from_secs(5);
+const BROADCAST_INTERVAL: Duration = Duration::from_secs(1); // OPTIMIZED: 5s → 1s for instant discovery
 const PEER_STALE_SECS: u64 = 30;
 const MAX_DGRAM: usize = 8 * 1024;
 const TCP_PORT_OFFSET: u16 = 1000; // TCP port = UDP port + offset
 // const TCP_CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 // const TCP_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-const TCP_MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
+const TCP_MESSAGE_TIMEOUT: Duration = Duration::from_secs(2); // OPTIMIZED: 5s → 2s for faster messaging
 
 /// Info exposed to UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
