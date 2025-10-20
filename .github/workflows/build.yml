@@ -61,10 +61,24 @@ jobs:
             wget \
             file
 
-      - name: Install frontend dependencies
+      - name: Clean npm cache and lockfile
         working-directory: wichain-backend/frontend
         run: |
-          npm install
+          rm -f package-lock.json
+          rm -rf node_modules
+          npm cache clean --force
+          
+      - name: Install frontend dependencies
+        working-directory: wichain-backend/frontend
+        run: npm install
+
+      - name: Verify Tauri versions
+        working-directory: wichain-backend/frontend
+        run: |
+          echo "NPM Tauri versions:"
+          npm list @tauri-apps/api @tauri-apps/cli
+          echo "Rust Cargo.toml:"
+          cat ../src-tauri/Cargo.toml | grep "tauri ="
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
@@ -72,6 +86,10 @@ jobs:
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version '^2'
+
+      - name: Update Cargo dependencies
+        working-directory: wichain-backend/src-tauri
+        run: cargo update
 
       - name: Build Tauri app
         working-directory: wichain-backend/src-tauri
