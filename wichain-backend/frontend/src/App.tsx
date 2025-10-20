@@ -245,24 +245,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshPeers();
-    const interval = setInterval(refreshPeers, 2_000); // OPTIMIZED: 5s → 2s for faster peer updates
+    refreshPeers(); // Initial load
     
-    // Only listen to Tauri events on desktop
+    // 🚀 REAL-TIME: Event-driven updates (NO POLLING!)
     let unlistenPromise: any = null;
     if (tauriListen) {
       unlistenPromise = tauriListen('peer_update', () => {
-        refreshPeers();
+        refreshPeers(); // Instant update on event
       });
+    } else {
+      // Fallback: Aggressive polling only if events unavailable
+      const interval = setInterval(refreshPeers, 1_000);
+      return () => clearInterval(interval);
     }
     
     return () => {
-      clearInterval(interval);
       if (unlistenPromise) {
         unlistenPromise.then((un: any) => un());
       }
     };
-  }, [refreshPeers]);
+  }, [refreshPeers, tauriListen]);
 
   // Groups effect
   useEffect(() => {
@@ -288,24 +290,26 @@ export default function App() {
     apiGetChatHistory().then(setMessages).catch(console.error);
   }, []);
   useEffect(() => {
-    refreshMessages();
-    const interval = setInterval(refreshMessages, 3_000); // OPTIMIZED: 10s → 3s for faster message delivery
+    refreshMessages(); // Initial load
     
-    // Only listen to Tauri events on desktop
+    // 🚀 REAL-TIME: Event-driven updates (NO POLLING!)
     let unlistenPromise: any = null;
     if (tauriListen) {
       unlistenPromise = tauriListen('chat_update', () => {
-        refreshMessages();
+        refreshMessages(); // Instant update on event
       });
+    } else {
+      // Fallback: Aggressive polling only if events unavailable
+      const interval = setInterval(refreshMessages, 1_000);
+      return () => clearInterval(interval);
     }
     
     return () => {
-      clearInterval(interval);
       if (unlistenPromise) {
         unlistenPromise.then((un: any) => un());
       }
     };
-  }, [refreshMessages]);
+  }, [refreshMessages, tauriListen]);
 
   // Compose / Send
   const [text, setText] = useState('');

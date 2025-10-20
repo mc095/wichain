@@ -21,7 +21,7 @@ use tokio::{
 };
 use tracing::{error, info, warn, debug};
 
-const BROADCAST_INTERVAL: Duration = Duration::from_secs(1); // OPTIMIZED: 5s → 1s for instant discovery
+const BROADCAST_INTERVAL: Duration = Duration::from_millis(500); // ⚡ REAL-TIME: 500ms for INSTANT peer discovery!
 const PEER_STALE_SECS: u64 = 30;
 const MAX_DGRAM: usize = 8 * 1024;
 const TCP_PORT_OFFSET: u16 = 1000; // TCP port = UDP port + offset
