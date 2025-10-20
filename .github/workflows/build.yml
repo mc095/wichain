@@ -29,17 +29,24 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: wichain-backend/frontend/package-lock.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform.rust_target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wichain-backend/src-tauri
 
       - name: Install Linux dependencies
         if: matrix.platform.os == 'ubuntu-22.04'
@@ -73,14 +80,14 @@ jobs:
 
       - name: Upload artifacts (Windows)
         if: matrix.platform.os == 'windows-latest'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}
           path: wichain-backend/src-tauri/target/release/bundle/msi/*.msi
 
       - name: Upload artifacts (Linux)
         if: matrix.platform.os == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}
           path: |
@@ -89,7 +96,7 @@ jobs:
 
       - name: Upload artifacts (macOS)
         if: matrix.platform.os == 'macos-latest'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}
           path: wichain-backend/src-tauri/target/release/bundle/dmg/*.dmg
@@ -101,16 +108,18 @@ jobs:
     
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            wichain-windows/**/*.msi
-            wichain-linux/**/*.deb
-            wichain-linux/**/*.AppImage
-            wichain-macos/**/*.dmg
+            artifacts/wichain-windows/**/*.msi
+            artifacts/wichain-linux/**/*.deb
+            artifacts/wichain-linux/**/*.AppImage
+            artifacts/wichain-macos/**/*.dmg
           draft: false
           prerelease: false
         env:
