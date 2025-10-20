@@ -65,14 +65,14 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: wichain-backend/frontend
-        run: npm install
+        run: npm ci
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
         run: npm run build
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli
+        run: cargo install tauri-cli --version '^2.6'
 
       - name: Build Tauri app
         working-directory: wichain-backend/src-tauri
