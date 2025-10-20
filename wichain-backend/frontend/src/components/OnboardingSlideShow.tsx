@@ -66,7 +66,7 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
   };
 
   const currentSlideData = slides[currentSlide];
-  const progress = ((currentSlide + 1) / slides.length) * 100;
+  // const progress = ((currentSlide + 1) / slides.length) * 100;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
@@ -143,7 +143,7 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
         </motion.div>
 
         {/* Progress Bar */}
-        <motion.div 
+        {/* <motion.div 
           className="mb-8"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -165,7 +165,7 @@ export function OnboardingSlideshow({ onGetStarted }: Props) {
               transition={{ duration: 0.5 }}
             />
           </div>
-        </motion.div>
+        </motion.div> */}
 
         {/* Slide Content */}
         <AnimatePresence mode="wait">

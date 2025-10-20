@@ -1,11 +1,13 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+@import url('https://api.fontshare.com/v2/css?f[]=editorial-new@400,500,600,700&f[]=general-sans@400,500,600,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Doto:wght@100..900&display=swap');
 
 @import "tailwindcss";
 
 :root {
-  font-family: 'Inter', 'Poppins', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Editorial New', 'General Sans', 'Inter', 'Poppins', system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
@@ -186,9 +188,21 @@ button, input, select, textarea {
 
 /* Typography improvements */
 .font-display {
-  font-family: 'Poppins', 'Inter', system-ui, sans-serif;
+  font-family: 'Editorial New', 'General Sans', 'Poppins', 'Inter', system-ui, sans-serif;
   font-weight: 600;
   letter-spacing: -0.025em;
+}
+
+.font-editorial {
+  font-family: 'Editorial New', serif;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+.font-grotesk {
+  font-family: 'General Sans', 'Inter', sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 .font-mono {
@@ -259,6 +273,49 @@ button, input, select, textarea {
   .mobile-full {
     width: 100%;
   }
+}
+
+/* Starry space background */
+.space-background {
+  position: relative;
+  background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0a0a0f 100%);
+}
+
+.space-background::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    radial-gradient(2px 2px at 20px 30px, white, transparent),
+    radial-gradient(2px 2px at 60px 70px, white, transparent),
+    radial-gradient(1px 1px at 50px 50px, white, transparent),
+    radial-gradient(1px 1px at 130px 80px, white, transparent),
+    radial-gradient(2px 2px at 90px 10px, white, transparent),
+    radial-gradient(1px 1px at 150px 120px, white, transparent),
+    radial-gradient(1px 1px at 200px 40px, white, transparent),
+    radial-gradient(2px 2px at 170px 90px, white, transparent);
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  opacity: 0.4;
+  animation: twinkle 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes twinkle {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Light mode background */
+.light-background {
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 50%, #f1f5f9 100%);
 }
 
 /* Dark theme overrides */

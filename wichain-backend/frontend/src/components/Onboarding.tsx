@@ -1,12 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  User, 
-  Sparkles, 
-  Shield, 
-  Zap,
-  Check
-} from 'lucide-react';
+
 
 interface Props {
   initialAlias: string;
@@ -64,87 +58,48 @@ export function Onboarding({ initialAlias, onDone }: Props) {
             duration: 0.5 
           }}
         >
-          <div className="bg-slate-800/90 backdrop-blur-xl border border-slate-700/50 rounded-2xl p-6">
-            {/* Header with animated icon */}
+          <div className="bg-black/90 backdrop-blur-xl border border-white/10 rounded-2xl p-8 shadow-2xl">
+            {/* Header */}
             <motion.div 
-              className="text-center mb-6"
+              className="text-center mb-8"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
             >
-              <motion.div
-                className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-3"
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ 
-                  type: "spring", 
-                  stiffness: 300, 
-                  damping: 20,
-                  delay: 0.3 
-                }}
-              >
-                <User size={24} className="text-white" />
-              </motion.div>
-              
               <motion.h2 
-                className="text-xl font-display text-white mb-2"
+                className="text-3xl text-white mb-3"
+                style={{ fontFamily: 'Doto, sans-serif', fontWeight: 600, letterSpacing: '0.05em' }}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.4 }}
+                transition={{ delay: 0.3 }}
               >
                 Welcome to WiChain
               </motion.h2>
               
               <motion.p 
-                className="text-slate-400 text-sm"
+                className="text-gray-400 font-grotesk"
+                style={{ fontSize: '15px', fontWeight: 400 }}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                transition={{ delay: 0.5 }}
+                transition={{ delay: 0.4 }}
               >
-                Choose your display name to get started
+                Choose your name to get started
               </motion.p>
-            </motion.div>
-
-            {/* Features */}
-            <motion.div 
-              className="space-y-2 mb-6"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6 }}
-            >
-              {[
-                { icon: Shield, text: "End-to-end encrypted messaging" },
-                { icon: Zap, text: "Lightning-fast peer-to-peer" },
-                { icon: Sparkles, text: "Decentralized & secure" }
-              ].map((feature, index) => (
-                <motion.div 
-                  key={feature.text}
-                  className="flex items-center space-x-2 text-slate-300"
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.7 + index * 0.1 }}
-                >
-                  <div className="w-6 h-6 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                    <feature.icon size={12} className="text-blue-400" />
-                  </div>
-                  <span className="text-xs">{feature.text}</span>
-                </motion.div>
-              ))}
             </motion.div>
 
             {/* Input */}
             <motion.div 
-              className="mb-4"
+              className="mb-6"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.8 }}
+              transition={{ delay: 0.5 }}
             >
-              <label className="block text-slate-300 text-sm font-medium mb-2">
-                Display Name
+              <label className="block text-gray-300 text-sm font-grotesk font-medium mb-2">
+                Name
               </label>
               <input
                 type="text"
-                placeholder="Enter your alias"
+                placeholder="Enter your name"
                 value={alias}
                 onChange={(e) => setAlias(e.target.value)}
                 onKeyDown={(e) => {
@@ -153,7 +108,7 @@ export function Onboarding({ initialAlias, onDone }: Props) {
                   }
                 }}
                 autoFocus
-                className="w-full px-3 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors text-sm"
+                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:border-white/30 focus:outline-none transition-colors font-grotesk"
               />
             </motion.div>
 
@@ -161,22 +116,22 @@ export function Onboarding({ initialAlias, onDone }: Props) {
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.9 }}
+              transition={{ delay: 0.6 }}
             >
               <button
-                className="w-full px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 transition-all duration-200 flex items-center justify-center space-x-2 text-sm"
+                className="w-full px-4 py-3 bg-white text-black rounded-lg font-grotesk font-medium hover:bg-gray-100 disabled:opacity-50 transition-all duration-200 flex items-center justify-center space-x-2"
                 onClick={handleSubmit}
                 disabled={!alias.trim() || isLoading}
               >
                 {isLoading ? (
                   <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
                     <span>Setting up...</span>
                   </>
                 ) : (
                   <>
-                    <Check size={14} />
                     <span>Continue</span>
+                    <span>→</span>
                   </>
                 )}
               </button>

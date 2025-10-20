@@ -10,7 +10,6 @@ import {
   apiResetData,
   apiCreateGroup,
   apiListGroups,
-  apiExportMessagesToJson,
   type Identity,
   type PeerInfo,
   type ChatBody,
@@ -25,12 +24,11 @@ import { listen } from '@tauri-apps/api/event';
 import { getRandomProfilePicture } from './utils/profilePictures';
 
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  MessageCircle, 
-  Users, 
-  Settings, 
-  Plus, 
-  Search, 
+import {
+  MessageCircle,
+  Settings,
+  Plus,
+  Search,
   Send,
   Hash,
   X,
@@ -38,7 +36,6 @@ import {
   Power,
   Image,
   Menu,
-  Lock,
   Trash2
 } from 'lucide-react';
 
@@ -50,35 +47,35 @@ type Target =
 const onboardingSlides = [
   {
     id: 1,
-    title: "Welcome to WiChain",
-    subtitle: "The future of secure, decentralized messaging",
-    icon: MessageCircle,
-    description: "Experience the next generation of private communication with military-grade encryption and zero-knowledge architecture.",
-    features: ["Decentralized Network", "End-to-End Encryption", "Zero-Knowledge Architecture"]
+    title: "WiChain",
+    subtitle: "Secure messaging reimagined for the decentralized era.",
+    icon: null,
+    description: "Secure messaging reimagined for the decentralized era.",
+    features: []
   },
   {
     id: 2,
-    title: "End-to-End Encryption",
-    subtitle: "Your messages are protected with military-grade AES-256-GCM encryption",
-    icon: Lock as any,
-    description: "Only you and your recipients can read your messages. Not even we can access your private conversations.",
-    features: ["AES-256-GCM encryption", "Perfect forward secrecy", "Zero-knowledge architecture"]
+    title: "",
+    subtitle: "Your conversations, encrypted by design, accessible only to you.",
+    icon: null,
+    description: "Your conversations, encrypted by design, accessible only to you.",
+    features: []
   },
   {
     id: 3,
-    title: "Decentralized Network",
-    subtitle: "No central servers, no single point of failure",
-    icon: Hash,
-    description: "Built on a peer-to-peer network that ensures your messages are always available and never censored.",
-    features: ["Peer-to-peer messaging", "No central servers", "Censorship resistant"]
+    title: "",
+    subtitle: "No servers, no surveillance—just pure peer-to-peer connection.",
+    icon: null,
+    description: "No servers, no surveillance—just pure peer-to-peer connection.",
+    features: []
   },
   {
     id: 4,
-    title: "Ready to Start",
-    subtitle: "Create your secure identity and begin messaging",
-    icon: Users,
-    description: "Set up your alias and start connecting with friends and colleagues in complete privacy.",
-    features: ["Secure identity", "Group messaging", "File sharing"]
+    title: "",
+    subtitle: "Your identity, your privacy, your control—always.",
+    icon: null,
+    description: "Your identity, your privacy, your control—always.",
+    features: []
   }
 ];
 
@@ -143,7 +140,7 @@ export default function App() {
         alert(`Image too large! Maximum size is ${MAX_SIZE / (1024 * 1024)}MB. Your image is ${(file.size / (1024 * 1024)).toFixed(1)}MB.`);
         return;
       }
-      
+
       setSelectedImage(file);
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -266,7 +263,7 @@ export default function App() {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
     };
-    
+
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
@@ -300,7 +297,7 @@ export default function App() {
   const send = useCallback(async () => {
     const msg = text.trim();
     const hasImage = selectedImage !== null;
-    
+
     if ((!msg && !hasImage) || !target) {
       return;
     }
@@ -309,11 +306,11 @@ export default function App() {
     }
     setSending(true);
     let ok = false;
-    
+
     try {
       // Create message content
       let messageContent = msg;
-      
+
       if (hasImage && selectedImage) {
         // Compress image before sending
         const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.8): Promise<string> => {
@@ -321,7 +318,7 @@ export default function App() {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             const img = new window.Image();
-            
+
             img.onload = () => {
               // Calculate new dimensions
               let { width, height } = img;
@@ -329,20 +326,20 @@ export default function App() {
                 height = (height * maxWidth) / width;
                 width = maxWidth;
               }
-              
+
               canvas.width = width;
               canvas.height = height;
-              
+
               // Draw and compress
               ctx?.drawImage(img, 0, 0, width, height);
               const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
               resolve(compressedDataUrl);
             };
-            
+
             img.src = URL.createObjectURL(file);
           });
         };
-        
+
         try {
           const compressedImage = await compressImage(selectedImage);
           const imageData = {
@@ -353,7 +350,7 @@ export default function App() {
             compressedSize: compressedImage.length,
             mimeType: 'image/jpeg'
           };
-          
+
           // Check if compressed image is still too large
           const MAX_BASE64_SIZE = 6 * 1024 * 1024; // 6MB base64 limit
           if (compressedImage.length > MAX_BASE64_SIZE) {
@@ -361,25 +358,25 @@ export default function App() {
             setSending(false);
             return;
           }
-          
+
           // Send image data as JSON string
           const imageMessage = msg ? `${msg}\n[IMAGE_DATA:${JSON.stringify(imageData)}]` : `[IMAGE_DATA:${JSON.stringify(imageData)}]`;
-          
-    if (target.kind === 'peer') {
+
+          if (target.kind === 'peer') {
             ok = await apiAddPeerMessage(imageMessage, target.id);
-    } else if (target.kind === 'group') {
+          } else if (target.kind === 'group') {
             ok = await apiAddGroupMessage(imageMessage, target.id);
-    }
-          
-    setSending(false);
-    if (ok) {
-      setText('');
+          }
+
+          setSending(false);
+          if (ok) {
+            setText('');
             setSelectedImage(null);
             setImagePreview(null);
-      refreshMessages();
-    } else {
-      console.warn('Send failed (see backend log).');
-    }
+            refreshMessages();
+          } else {
+            console.warn('Send failed (see backend log).');
+          }
         } catch (error) {
           console.error('Error compressing image:', error);
           setSending(false);
@@ -387,14 +384,14 @@ export default function App() {
         }
         return; // Exit early
       }
-      
+
       // Send text message
       if (target.kind === 'peer') {
         ok = await apiAddPeerMessage(messageContent, target.id);
       } else if (target.kind === 'group') {
         ok = await apiAddGroupMessage(messageContent, target.id);
       }
-      
+
       setSending(false);
       if (ok) {
         setText('');
@@ -423,7 +420,7 @@ export default function App() {
   // Clear current chat
   const clearCurrentChat = useCallback(async () => {
     if (!target) return;
-    
+
     if (window.confirm('Are you sure you want to clear this chat? This action cannot be undone.')) {
       const ok = await apiResetData();
       if (ok) {
@@ -436,16 +433,6 @@ export default function App() {
   }, [target, refreshMessages]);
 
 
-  // Export messages to JSON
-  const handleExportMessages = useCallback(async () => {
-    try {
-      const filename = await apiExportMessagesToJson();
-      alert(`Messages exported successfully to: ${filename}`);
-    } catch (error) {
-      console.error('Export failed:', error);
-      alert('Failed to export messages. Please try again.');
-    }
-  }, []);
 
   // Profile editing functions
 
@@ -481,11 +468,11 @@ export default function App() {
 
   const handleMouseMove = (e: MouseEvent) => {
     if (!isResizing || isMobile) return;
-    
+
     const newWidth = e.clientX;
     const minWidth = isMobile ? 280 : 250;
     const maxWidth = isMobile ? 350 : 500;
-    
+
     if (newWidth >= minWidth && newWidth <= maxWidth) {
       setLeftPanelWidth(newWidth);
     }
@@ -570,128 +557,110 @@ export default function App() {
   // Render
   if (showSlideshow && identity) {
     const currentSlideData = onboardingSlides[currentSlide];
-    
+
     return (
-      <div className="min-h-screen bg-gradient-to-br from-black via-slate-900 to-slate-700 flex items-center justify-center p-4">
-        <div className="w-full max-w-xl">
+      <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden">
+        {/* Video Background */}
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+          style={{ filter: 'brightness(0.35)' }}
+        >
+          <source src="/intro-vid/intro.mp4" type="video/mp4" />
+        </video>
 
-          {/* Slide Content */}
-          <motion.div
-            key={currentSlide}
-            initial={{ opacity: 0, x: 50 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -50 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="text-center"
-          >
-            {/* Icon */}
-            <motion.div
-              className="w-20 h-20 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center mx-auto mb-6"
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.2, duration: 0.5 }}
-            >
-              <currentSlideData.icon size={32} className="text-white" />
-            </motion.div>
+        {/* Overlay */}
+        <div className="absolute inset-0 bg-black/30"></div>
 
-            {/* Title */}
-            <motion.h1
-              className="text-3xl md:text-4xl font-display text-white mb-3"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3, duration: 0.5 }}
-            >
-              {currentSlideData.title}
-            </motion.h1>
+        <div className="w-full h-full relative z-10 flex flex-col">
 
-            {/* Subtitle */}
-            <motion.p
-              className="text-lg text-slate-300 mb-6 max-w-lg mx-auto"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4, duration: 0.5 }}
-            >
-              {currentSlideData.subtitle}
-            </motion.p>
-
-            {/* Description */}
-            <motion.p
-              className="text-slate-400 mb-6 max-w-lg mx-auto leading-relaxed text-sm"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5, duration: 0.5 }}
-            >
-              {currentSlideData.description}
-            </motion.p>
-
-            {/* Features */}
-            <motion.div
-              className="space-y-2 mb-8"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6, duration: 0.5 }}
-            >
-              {currentSlideData.features.map((feature, index) => (
-                <motion.div
-                  key={feature}
-                  className="flex items-center justify-center text-slate-300"
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.7 + index * 0.1, duration: 0.3 }}
-                >
-                  <span className="text-sm">• {feature}</span>
-                </motion.div>
-              ))}
-            </motion.div>
-          </motion.div>
-
-          {/* Navigation */}
-          <div className="flex items-center justify-center space-x-8">
+          {/* Navigation Buttons - Corners */}
+          <div className="absolute top-8 left-8 right-8 flex items-center justify-between pointer-events-none">
             <button
               onClick={prevSlide}
               disabled={currentSlide === 0}
-              className="px-4 py-2 bg-slate-700/50 text-white rounded-lg text-sm font-medium hover:bg-slate-700/70 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+              className="px-6 py-3 bg-white/10 backdrop-blur-sm text-white rounded-full text-sm font-grotesk hover:bg-white/20 disabled:opacity-0 disabled:cursor-not-allowed transition-all duration-300 pointer-events-auto border border-white/20"
+              style={{ fontWeight: 400 }}
             >
-              Previous
+              ← Previous
             </button>
 
-            <div className="flex space-x-2">
-              {onboardingSlides.map((_, index) => (
-                <div
-                  key={index}
-                  className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    index === currentSlide
-                      ? 'bg-gradient-to-r from-slate-600 to-slate-800'
-                      : 'bg-slate-600'
-                  }`}
-                />
-              ))}
+            <div className="flex-1 flex justify-end">
+              <button
+                onClick={nextSlide}
+                className="px-6 py-3 bg-white text-black rounded-full text-sm font-grotesk hover:bg-white/90 transition-all duration-300 pointer-events-auto"
+                style={{ fontWeight: 500 }}
+              >
+                {currentSlide === onboardingSlides.length - 1 ? 'Get Started →' : 'Next →'}
+              </button>
             </div>
-
-            <button
-              onClick={nextSlide}
-              className="px-4 py-2 bg-gradient-to-r from-slate-600 to-slate-800 text-white rounded-lg text-sm font-semibold hover:from-slate-700 hover:to-slate-900 transition-all duration-200"
-            >
-              {currentSlide === onboardingSlides.length - 1 ? 'Get Started' : 'Next'}
-            </button>
           </div>
+
+          {/* Center Content */}
+          <div className="flex-1 flex items-center justify-center">
+
+            {/* Slide Content */}
+            <motion.div
+              key={currentSlide}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -30 }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="text-center px-8 max-w-5xl w-full"
+            >
+              {/* Title - Only for first slide */}
+              {currentSlideData.title && (
+                <motion.h1
+                  className="text-6xl md:text-8xl text-white mb-6"
+                  style={{
+                    fontFamily: 'Doto, sans-serif',
+                    fontWeight: 600,
+                    letterSpacing: '0.08em'
+                  }}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2, duration: 0.6 }}
+                >
+                  {currentSlideData.title}
+                </motion.h1>
+              )}
+
+              {/* Subtitle */}
+              <motion.p
+                className="text-2xl md:text-3xl font-grotesk text-gray-300 mb-8 max-w-4xl mx-auto leading-relaxed"
+                style={{
+                  fontWeight: 300,
+                  letterSpacing: '-0.02em'
+                }}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: currentSlideData.title ? 0.4 : 0.2, duration: 0.6 }}
+              >
+                {currentSlideData.subtitle}
+              </motion.p>
+            </motion.div>
+          </div>
+
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`flex h-screen text-white overflow-hidden mobile-scroll ${darkMode ? 'bg-gradient-to-br from-black via-slate-900 to-slate-700' : 'bg-gradient-to-br from-gray-50 to-gray-100'} ${isResizing ? 'select-none' : ''}`}>
+    <div className={`flex h-screen overflow-hidden mobile-scroll ${darkMode ? 'space-background text-white' : 'light-background text-gray-900'} ${isResizing ? 'select-none' : ''}`}>
       {/* Left Sidebar - Global Navigation */}
-    <motion.div
-        className="w-16 bg-slate-800/50 backdrop-blur-xl border-r border-slate-700/50 flex flex-col items-center py-4 space-y-4"
+      <motion.div
+        className={`w-16 backdrop-blur-xl border-r flex flex-col items-center py-4 space-y-4 ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
         initial={{ x: -100, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
-      transition={{ duration: 0.5 }}
-    >
+        transition={{ duration: 0.5 }}
+      >
         {/* Logo */}
-        <motion.div 
-          className="w-10 h-10 bg-gradient-to-br from-slate-600 to-slate-800 rounded-xl flex items-center justify-center text-white font-bold text-lg"
+        <motion.div
+          className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white font-bold text-lg border border-white/10"
           whileHover={{ scale: 1.1, rotate: 5 }}
           transition={{ type: "spring", stiffness: 300 }}
         >
@@ -701,20 +670,19 @@ export default function App() {
         {/* Navigation Items */}
         <div className="flex flex-col space-y-3">
           {[
-            { icon: MessageCircle, label: "Messages", active: true, onClick: () => {} },
+            { icon: MessageCircle, label: "Messages", active: true, onClick: () => { } },
             { icon: Plus, label: "Create Group", active: false, onClick: () => setGroupModalOpen(true) },
             { icon: Hash, label: "Account", active: false, onClick: () => setShowAccountDialog(true) },
             { icon: BarChart3, label: "Statistics", active: false, onClick: () => setShowStats(!showStats) },
           ].map((item, index) => (
-          <motion.button
+            <motion.button
               key={item.label}
               onClick={item.onClick}
-              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
-                item.active 
-                  ? 'bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-lg' 
-                  : `${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200/50'}`
-              }`}
-            whileHover={{ scale: 1.1 }}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${item.active
+                ? 'bg-gradient-to-br from-slate-600 to-slate-800 text-white shadow-lg'
+                : `${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-200/50'}`
+                }`}
+              whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.95 }}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -722,7 +690,7 @@ export default function App() {
               title={item.label}
             >
               <item.icon size={20} />
-          </motion.button>
+            </motion.button>
           ))}
         </div>
 
@@ -737,7 +705,7 @@ export default function App() {
           >
             <Settings size={20} />
           </motion.button>
-          
+
           <motion.button
             onClick={handleExit}
             className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${darkMode ? 'text-red-400 hover:text-red-300 hover:bg-red-900/20' : 'text-red-600 hover:text-red-700 hover:bg-red-100'}`}
@@ -751,7 +719,7 @@ export default function App() {
 
         {/* New Chat Button */}
         <motion.button
-          className="w-10 h-10 bg-gradient-to-br from-slate-600 to-slate-800 rounded-xl flex items-center justify-center text-white shadow-lg"
+          className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white border border-white/10"
           whileHover={{ scale: 1.1, rotate: 90 }}
           whileTap={{ scale: 0.95 }}
           onClick={openGroupModal}
@@ -762,8 +730,8 @@ export default function App() {
       </motion.div>
 
       {/* Chat List Sidebar */}
-      <motion.div 
-        className={`${sidebarOpen ? '' : 'w-0'} bg-slate-800/30 backdrop-blur-xl border-r border-slate-700/50 transition-all duration-300 overflow-hidden relative mobile-scroll ${isMobile ? 'sidebar-mobile' : ''}`}
+      <motion.div
+        className={`${sidebarOpen ? '' : 'w-0'} backdrop-blur-xl border-r transition-all duration-300 overflow-hidden relative mobile-scroll ${isMobile ? 'sidebar-mobile' : ''} ${darkMode ? 'bg-slate-800/30 border-slate-700/50' : 'bg-white/30 border-gray-200/50'}`}
         style={{ width: sidebarOpen ? `${isMobile ? 300 : leftPanelWidth}px` : '0px' }}
         initial={{ width: 0 }}
         animate={{ width: sidebarOpen ? (isMobile ? 300 : leftPanelWidth) : 0 }}
@@ -782,43 +750,43 @@ export default function App() {
           </div>
         )}
 
-          {sidebarOpen && (
+        {sidebarOpen && (
           <div className="h-full flex flex-col">
             {/* Header */}
-            <div className="p-4 border-b border-slate-700/50">
+            <div className={`p-4 border-b ${darkMode ? 'border-slate-700/50' : 'border-gray-200/50'}`}>
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">Chats</h2>
+                <h2 className={`text-lg font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Chats</h2>
                 <button
-                  className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors"
+                  className={`p-2 rounded-lg transition-colors ${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'}`}
                   onClick={() => setSidebarOpen(false)}
                 >
                   <X size={16} />
                 </button>
               </div>
               <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                <Search size={16} className={`absolute left-3 top-1/2 transform -translate-y-1/2 ${darkMode ? 'text-slate-400' : 'text-gray-500'}`} />
                 <input
                   type="text"
                   placeholder="Search conversations..."
-                  className="w-full pl-10 pr-4 py-2 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors"
+                  className={`w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none transition-colors ${darkMode ? 'bg-slate-700/50 border-slate-600/50 text-white placeholder-slate-400 focus:border-blue-500/50' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500 focus:border-blue-500'}`}
                 />
               </div>
             </div>
 
             {/* Chat List */}
             <div className="flex-1 overflow-y-auto">
-            <PeerList
-              peers={displayedPeers}
-              groups={groups}
-              aliasMap={aliasMap}
-              myPub={myPub}
-              selected={target}
-              onSelectPeer={(id) => {
-                setTarget({ kind: 'peer', id });
-              }}
-              onSelectGroup={(id) => {
-                setTarget({ kind: 'group', id });
-              }}
+              <PeerList
+                peers={displayedPeers}
+                groups={groups}
+                aliasMap={aliasMap}
+                myPub={myPub}
+                selected={target}
+                onSelectPeer={(id) => {
+                  setTarget({ kind: 'peer', id });
+                }}
+                onSelectGroup={(id) => {
+                  setTarget({ kind: 'group', id });
+                }}
                 messages={messages}
               />
             </div>
@@ -831,8 +799,8 @@ export default function App() {
         {target ? (
           <>
             {/* Chat Header */}
-            <motion.div 
-              className="bg-slate-800/50 backdrop-blur-xl border-b border-slate-700/50 p-4 flex items-center justify-between"
+            <motion.div
+              className={`backdrop-blur-xl border-b p-4 flex items-center justify-between ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
               initial={{ y: -50, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.3 }}
@@ -840,27 +808,27 @@ export default function App() {
               <div className="flex items-center space-x-4">
                 {!sidebarOpen && (
                   <button
-                    className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors"
+                    className={`p-2 rounded-lg transition-colors ${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'}`}
                     onClick={() => setSidebarOpen(true)}
                   >
                     <Menu size={16} />
                   </button>
                 )}
-                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                <div className="w-10 h-10 bg-black rounded-full flex items-center justify-center border border-white/20">
                   <span className="text-white font-semibold text-sm">
                     {targetLabel.charAt(0).toUpperCase()}
                   </span>
                 </div>
                 <div>
-                  <h3 className="text-white font-semibold">{targetLabel}</h3>
-                  <p className="text-xs text-slate-400">
+                  <h3 className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{targetLabel}</h3>
+                  <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-gray-500'}`}>
                     {target.kind === 'group' ? `${groups.find(g => g.id === target.id)?.members.length || 0} members` : ''}
                   </p>
                 </div>
               </div>
 
               <div className="flex items-center space-x-2">
-                <button 
+                <button
                   onClick={() => {
                     if (searchQuery) {
                       setSearchQuery('');
@@ -871,16 +839,15 @@ export default function App() {
                       }
                     }
                   }}
-                  className={`p-2 rounded-lg transition-colors ${
-                    searchQuery 
-                      ? 'text-blue-400 hover:text-blue-300 bg-blue-900/20 hover:bg-blue-900/30' 
-                      : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
-                  }`}
+                  className={`p-2 rounded-lg transition-colors ${searchQuery
+                    ? 'text-blue-400 hover:text-blue-300 bg-blue-900/20 hover:bg-blue-900/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                    }`}
                   title={searchQuery ? 'Clear Search' : 'Search Messages'}
                 >
                   {searchQuery ? <X size={16} /> : <Search size={16} />}
                 </button>
-                <button 
+                <button
                   onClick={clearCurrentChat}
                   className="p-2 text-red-400 hover:text-red-300 rounded-lg hover:bg-red-900/20 transition-colors"
                   title="Clear Chat"
@@ -901,28 +868,28 @@ export default function App() {
 
             {/* Chat Messages */}
             <div className="flex-1 overflow-hidden">
-          <ChatView
-            messages={messages}
-            myPubkeyB64={myPub}
-            selectedTarget={target}
-            aliasMap={aliasMap}
-            groups={groups}
+              <ChatView
+                messages={messages}
+                myPubkeyB64={myPub}
+                selectedTarget={target}
+                aliasMap={aliasMap}
+                groups={groups}
                 searchQuery={searchQuery}
               />
             </div>
 
             {/* Image Preview */}
             {imagePreview && (
-              <motion.div 
+              <motion.div
                 className="bg-slate-800/50 backdrop-blur-xl border-t border-slate-700/50 p-4"
                 initial={{ y: 50, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ duration: 0.3 }}
               >
                 <div className="relative inline-block">
-                  <img 
-                    src={imagePreview} 
-                    alt="Preview" 
+                  <img
+                    src={imagePreview}
+                    alt="Preview"
                     className="max-w-xs max-h-48 rounded-lg object-cover"
                   />
                   <button
@@ -936,8 +903,8 @@ export default function App() {
             )}
 
             {/* Message Input */}
-            <motion.div 
-              className={`bg-slate-800/50 backdrop-blur-xl border-t border-slate-700/50 p-4 ${isMobile ? 'message-input-mobile safe-area-bottom' : ''}`}
+            <motion.div
+              className={`backdrop-blur-xl border-t p-4 ${isMobile ? 'message-input-mobile safe-area-bottom' : ''} ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
               initial={{ y: 50, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.3 }}
@@ -952,55 +919,52 @@ export default function App() {
                 />
                 <label
                   htmlFor="image-upload"
-                  className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/50 transition-colors cursor-pointer"
+                  className={`p-2 rounded-lg transition-colors cursor-pointer ${darkMode ? 'text-slate-400 hover:text-white hover:bg-slate-700/50' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'}`}
                   title="Attach Image"
                 >
                   <Image size={16} />
                 </label>
                 <input
-              type="text"
+                  type="text"
                   placeholder="Write a message..."
-              value={text}
+                  value={text}
                   onChange={(e: React.ChangeEvent<HTMLInputElement>) => setText(e.target.value)}
                   onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              disabled={sending || !target || !identity}
-                  className="flex-1 px-4 py-3 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white placeholder-slate-400 focus:border-blue-500/50 focus:outline-none transition-colors disabled:opacity-50"
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  disabled={sending || !target || !identity}
+                  className={`flex-1 px-4 py-3 border rounded-lg focus:outline-none transition-colors disabled:opacity-50 ${darkMode ? 'bg-slate-700/50 border-slate-600/50 text-white placeholder-slate-400 focus:border-blue-500/50' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500 focus:border-blue-500'}`}
                 />
                 <button
-                  className="px-4 py-3 bg-gradient-to-r from-slate-600 to-slate-800 text-white rounded-lg font-semibold hover:from-slate-700 hover:to-slate-900 disabled:opacity-50 transition-all duration-200 flex items-center space-x-2"
-              onClick={send}
+                  className="px-4 py-3 bg-white text-black rounded-lg font-semibold hover:bg-gray-100 disabled:opacity-50 transition-all duration-200 flex items-center space-x-2"
+                  onClick={send}
                   disabled={sending || (!text.trim() && !selectedImage) || !target || !identity}
                 >
                   {sending ? (
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <div className="w-4 h-4 border-2 border-black/30 border-t-black rounded-full animate-spin" />
                   ) : (
                     <Send size={16} />
                   )}
                   <span>{sending ? 'Sending...' : 'Send'}</span>
                 </button>
-          </div>
+              </div>
             </motion.div>
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">
-            <motion.div 
+            <motion.div
               className="text-center"
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.5 }}
             >
-              <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                <MessageCircle size={40} className="text-white" />
-              </div>
-              <h3 className="text-xl font-display text-white mb-2">Welcome to WiChain</h3>
-              <p className="text-slate-400 mb-6">Select a conversation to start messaging</p>
+              <h3 className={`text-xl font-display mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Welcome to WiChain</h3>
+              <p className={`mb-6 ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Select a conversation to start messaging</p>
               <button
-                className="px-6 py-3 bg-gradient-to-r from-slate-600 to-slate-800 text-white rounded-lg font-semibold hover:from-slate-700 hover:to-slate-900 transition-all duration-200 flex items-center space-x-2 mx-auto"
+                className="px-6 py-3 bg-white text-black rounded-lg font-grotesk font-medium hover:bg-gray-100 transition-all duration-200 flex items-center space-x-2 mx-auto"
                 onClick={openGroupModal}
               >
                 <Plus size={16} />
@@ -1014,9 +978,9 @@ export default function App() {
 
       {/* Modals */}
       <AnimatePresence>
-      {showOnboarding && identity && (
-        <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
-      )}
+        {showOnboarding && identity && (
+          <Onboarding initialAlias={identity.alias} onDone={onboardingDone} />
+        )}
       </AnimatePresence>
 
       <ResetConfirm
@@ -1026,7 +990,7 @@ export default function App() {
         label="Reset Chat"
         body="This will clear your local chat history. Your device identity will be preserved."
       />
-      
+
       <GroupModal
         open={groupModalOpen}
         onClose={closeGroupModal}
@@ -1067,28 +1031,21 @@ export default function App() {
                 <span className={`${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Dark Mode</span>
                 <button
                   onClick={() => setDarkMode(!darkMode)}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    darkMode ? 'bg-gradient-to-r from-slate-600 to-slate-800' : 'bg-gray-300'
-                  }`}
+                  className={`w-12 h-6 rounded-full transition-colors ${darkMode ? 'bg-gradient-to-r from-slate-600 to-slate-800' : 'bg-gray-300'
+                    }`}
                 >
-                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                    darkMode ? 'translate-x-6' : 'translate-x-0.5'
-                  }`} />
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-0.5'
+                    }`} />
                 </button>
               </div>
 
-              {/* Export Messages */}
-              <button 
-                onClick={handleExportMessages}
-                className={`w-full p-3 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-100 hover:bg-gray-200'} transition-colors`}
-              >
-                <span className={darkMode ? 'text-slate-300' : 'text-gray-700'}>Export Messages to JSON</span>
-              </button>
-
               {/* Contact Admin */}
-              <button className={`w-full p-3 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-100 hover:bg-gray-200'} transition-colors`}>
+              <a
+                href="mailto:ganeshvahumilli@gmail.com"
+                className={`w-full p-3 rounded-lg ${darkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-100 hover:bg-gray-200'} transition-colors block text-center`}
+              >
                 <span className={darkMode ? 'text-slate-300' : 'text-gray-700'}>Contact Admin</span>
-              </button>
+              </a>
 
               {/* App Info */}
               <div className={`p-3 rounded-lg ${darkMode ? 'bg-slate-700' : 'bg-gray-100'}`}>
@@ -1100,7 +1057,7 @@ export default function App() {
                 </p>
               </div>
             </div>
-    </motion.div>
+          </motion.div>
         </motion.div>
       )}
 
@@ -1133,10 +1090,10 @@ export default function App() {
             <div className="text-center">
               {/* Account Avatar */}
               <div className="relative w-24 h-24 mx-auto mb-4">
-                <div className="w-24 h-24 bg-gradient-to-br from-slate-600 to-slate-800 rounded-full flex items-center justify-center overflow-hidden">
-                  <img 
-                    src={getRandomProfilePicture(identity?.public_key_b64 || 'default')} 
-                    alt="Profile" 
+                <div className="w-24 h-24 bg-black rounded-full flex items-center justify-center overflow-hidden border border-white/20">
+                  <img
+                    src={getRandomProfilePicture(identity?.public_key_b64 || 'default')}
+                    alt="Profile"
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -1150,11 +1107,10 @@ export default function App() {
                     value={editAlias}
                     onChange={(e) => setEditAlias(e.target.value)}
                     placeholder="Enter new name"
-                    className={`w-full px-4 py-2 rounded-lg border ${
-                      darkMode 
-                        ? 'bg-slate-700 border-slate-600 text-white placeholder-slate-400' 
-                        : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
-                    } focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                    className={`w-full px-4 py-2 rounded-lg border ${darkMode
+                      ? 'bg-slate-700 border-slate-600 text-white placeholder-slate-400'
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                      } focus:outline-none focus:ring-2 focus:ring-blue-500`}
                   />
                 </div>
               ) : (
@@ -1190,7 +1146,7 @@ export default function App() {
                       <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Cancel</span>
                     </button>
                     <button
-                      className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 transition-all duration-200"
+                      className="flex-1 px-4 py-2 rounded-lg bg-white text-black hover:bg-gray-100 transition-all duration-200"
                       onClick={handleSaveProfile}
                     >
                       <span className="text-sm">Save</span>
@@ -1205,7 +1161,7 @@ export default function App() {
                       <span className={`text-sm ${darkMode ? 'text-slate-300' : 'text-gray-700'}`}>Close</span>
                     </button>
                     <button
-                      className="flex-1 px-4 py-2 rounded-lg bg-gradient-to-r from-slate-600 to-slate-800 text-white hover:from-slate-700 hover:to-slate-900 transition-all duration-200"
+                      className="flex-1 px-4 py-2 rounded-lg bg-black text-white hover:bg-gray-900 transition-all duration-200"
                       onClick={() => {
                         setEditAlias(identity?.alias || '');
                         setIsEditingProfile(true);
@@ -1272,7 +1228,7 @@ function groupDisplayName(
   if (g.name && g.name.trim()) {
     return g.name;
   }
-  
+
   // Otherwise, generate name from members
   const names = g.members
     .filter((m) => m !== myPub)

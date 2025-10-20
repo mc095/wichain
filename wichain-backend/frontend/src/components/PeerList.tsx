@@ -143,7 +143,7 @@ export function PeerList({
                     key={peer.id}
                     className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
                       isSelected 
-                        ? 'bg-blue-500/20 border border-blue-500/30' 
+                        ? 'bg-white/10 border border-white/20' 
                         : 'hover:bg-slate-700/30'
                     }`}
                     onClick={() => onSelectPeer(peer.id)}
@@ -157,7 +157,7 @@ export function PeerList({
                     <div className="flex items-center space-x-3">
                       <div className="relative">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden ${
-                          isSelected ? 'ring-2 ring-blue-500/50' : ''
+                          isSelected ? 'ring-2 ring-white/30' : ''
                         }`}>
                           <img 
                             src={getRandomProfilePicture(peer.id)} 
@@ -228,7 +228,7 @@ export function PeerList({
                     key={group.id}
                     className={`group p-3 rounded-xl cursor-pointer transition-all duration-200 ${
                       isSelected 
-                        ? 'bg-blue-500/20 border border-blue-500/30' 
+                        ? 'bg-white/10 border border-white/20' 
                         : 'hover:bg-slate-700/30'
                     }`}
                     onClick={() => onSelectGroup(group.id)}
@@ -242,7 +242,7 @@ export function PeerList({
                     <div className="flex items-center space-x-3">
                       <div className="relative">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden ${
-                          isSelected ? 'ring-2 ring-blue-500/50' : ''
+                          isSelected ? 'ring-2 ring-white/30' : ''
                         }`}>
                           <img 
                             src={getRandomGroupProfilePicture(group.id)} 
@@ -263,7 +263,7 @@ export function PeerList({
                               value={editGroupName}
                               onChange={(e) => setEditGroupName(e.target.value)}
                               placeholder="Group name"
-                              className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-sm placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              className="w-full px-2 py-1 bg-slate-700 border border-slate-600 rounded text-white text-sm placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-white/30"
                               autoFocus
                             />
                             <div className="flex items-center space-x-2">
@@ -273,7 +273,7 @@ export function PeerList({
                                     e.stopPropagation();
                                     handleSaveGroup(group.id);
                                   }}
-                                  className="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded transition-colors"
+                                  className="px-2 py-1 bg-white text-black hover:bg-gray-100 text-xs rounded transition-colors font-medium"
                                 >
                                   Save
                                 </button>
@@ -303,7 +303,7 @@ export function PeerList({
                                   e.stopPropagation();
                                   startGroupEdit(group);
                                 }}
-                                className="text-blue-400 hover:text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-blue-900/20"
+                                className="text-white/60 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-white/10"
                                 title="Edit group"
                               >
                                 <Edit3 size={14} />
