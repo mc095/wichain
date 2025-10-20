@@ -64,7 +64,6 @@ jobs:
       - name: Install frontend dependencies
         working-directory: wichain-backend/frontend
         run: |
-          rm -f package-lock.json
           npm install
 
       - name: Build frontend
