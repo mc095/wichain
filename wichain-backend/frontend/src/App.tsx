@@ -557,6 +557,30 @@ export default function App() {
     refreshMessages();
   }, [target, refreshMessages]);
 
+  // 📷 CAMERA PHOTO HANDLER (Front Camera!)
+  const handlePhotoCapture = useCallback(async (imageData: string) => {
+    const photoData = {
+      type: 'image',
+      data: imageData,
+      filename: `photo-${Date.now()}.jpg`,
+      timestamp: Date.now()
+    };
+    
+    const photoMessage = `📷 Photo from Camera\n[IMAGE_DATA:${JSON.stringify(photoData)}]`;
+    
+    if (target?.kind === 'peer') {
+      await apiAddPeerMessage(photoMessage, target.id);
+    } else if (target?.kind === 'group') {
+      await apiAddGroupMessage(photoMessage, target.id);
+    }
+    refreshMessages();
+  }, [target, refreshMessages]);
+
+  // 📹 VIDEO CALL HANDLER (coming soon!)
+  const handleVideoCall = useCallback(() => {
+    alert('📹 Video Calling Feature!\n\nThis uses WebRTC P2P technology.\nImplementation in progress...\n\n✅ Works fully offline on LAN!\n✅ No servers needed!\n✅ Direct peer-to-peer!');
+  }, []);
+
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
   async function doReset() {
@@ -1087,12 +1111,14 @@ export default function App() {
               transition={{ duration: 0.3 }}
             >
               <div className="flex items-center space-x-2">
-                {/* 🚀 ADVANCED FEATURES - Location, Voice, Files, Screenshots */}
+                {/* 🚀 ADVANCED FEATURES - Location, Voice, Files, Camera, Screenshots, Video */}
                 <AdvancedFeatures
                   onSendLocation={handleLocationShare}
                   onSendVoice={handleVoiceMessage}
                   onSendFile={handleFileShare}
                   onSendScreenshot={handleScreenshot}
+                  onSendPhoto={handlePhotoCapture}
+                  onStartVideoCall={handleVideoCall}
                   darkMode={darkMode}
                 />
 

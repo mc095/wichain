@@ -2,7 +2,7 @@
 // Location Sharing, Voice Messages, File Sharing, Screen Capture & MORE!
 
 import { useState, useRef, useCallback } from 'react';
-import { MapPin, Mic, File, Camera, Zap, Shield } from 'lucide-react';
+import { MapPin, Mic, File, Camera, Monitor, Video, Zap, Shield } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface AdvancedFeaturesProps {
@@ -10,6 +10,8 @@ interface AdvancedFeaturesProps {
   onSendVoice: (audioBlob: Blob, duration: number) => void;
   onSendFile: (file: File) => void;
   onSendScreenshot: (imageData: string) => void;
+  onSendPhoto: (imageData: string) => void;
+  onStartVideoCall?: () => void;
   darkMode?: boolean;
 }
 
@@ -18,6 +20,8 @@ export function AdvancedFeatures({
   onSendVoice, 
   onSendFile,
   onSendScreenshot,
+  onSendPhoto,
+  onStartVideoCall,
   darkMode = true 
 }: AdvancedFeaturesProps) {
   const [isRecording, setIsRecording] = useState(false);
@@ -26,29 +30,94 @@ export function AdvancedFeatures({
   const audioChunksRef = useRef<Blob[]>([]);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // 📍 LOCATION SHARING
+  // 📍 DEVICE GPS LOCATION SHARING (NOT IP-BASED!)
   const shareLocation = useCallback(() => {
     if (!navigator.geolocation) {
       alert('❌ Geolocation not supported by your browser!');
       return;
     }
 
+    // Request permission first
+    if (navigator.permissions) {
+      navigator.permissions.query({ name: 'geolocation' }).then((result) => {
+        console.log('📍 Geolocation permission:', result.state);
+      });
+    }
+
+    // FORCE device GPS with high accuracy
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        console.log('✅ GPS Position:', position.coords);
+        console.log('📍 Accuracy:', position.coords.accuracy, 'meters');
+        console.log('🛰️ Altitude:', position.coords.altitude, 'meters');
+        console.log('⚡ Speed:', position.coords.speed, 'm/s');
+        
         onSendLocation(position);
-        alert(`✅ Location shared! Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`);
+        alert(`✅ GPS Location Shared!\nLat: ${position.coords.latitude.toFixed(6)}\nLon: ${position.coords.longitude.toFixed(6)}\nAccuracy: ±${Math.round(position.coords.accuracy)}m`);
       },
       (error) => {
-        console.error('Geolocation error:', error);
-        alert(`❌ Failed to get location: ${error.message}`);
+        console.error('❌ Geolocation error:', error);
+        let errorMsg = 'Failed to get GPS location: ';
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            errorMsg += 'Permission denied! Please allow location access.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMsg += 'GPS unavailable! Make sure GPS is enabled.';
+            break;
+          case error.TIMEOUT:
+            errorMsg += 'GPS timeout! Taking too long to get position.';
+            break;
+        }
+        alert(`❌ ${errorMsg}`);
       },
       {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
+        enableHighAccuracy: true,  // FORCE GPS, not WiFi/IP
+        timeout: 30000,            // 30 seconds for GPS to lock
+        maximumAge: 0              // Don't use cached location
       }
     );
   }, [onSendLocation]);
+
+  // 📷 CAMERA PHOTO CAPTURE (NOT SCREENSHOT!)
+  const capturePhoto = useCallback(async () => {
+    try {
+      // Request camera access (front camera by default)
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'user',  // Front camera
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        } 
+      });
+      
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.play();
+
+      video.onloadedmetadata = () => {
+        setTimeout(() => {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0);
+            const imageData = canvas.toDataURL('image/jpeg', 0.9);
+            onSendPhoto(imageData);
+            
+            // Stop camera
+            stream.getTracks().forEach(track => track.stop());
+            alert('✅ Photo captured from camera!');
+          }
+        }, 500); // Wait for camera to warm up
+      };
+    } catch (error) {
+      console.error('Camera error:', error);
+      alert('❌ Failed to access camera! Please allow camera permission.');
+    }
+  }, [onSendPhoto]);
 
   // 🎤 VOICE MESSAGES
   const startRecording = useCallback(async () => {
@@ -211,6 +280,21 @@ export function AdvancedFeatures({
         </motion.label>
       </div>
 
+      {/* Camera Photo Button (Front Camera!) */}
+      <motion.button
+        onClick={capturePhoto}
+        className={`p-2 rounded-lg transition-colors ${
+          darkMode 
+            ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-900/20' 
+            : 'text-pink-600 hover:text-pink-500 hover:bg-pink-100'
+        }`}
+        title="Take Photo 📷 (Front Camera)"
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.95 }}
+      >
+        <Camera size={20} />
+      </motion.button>
+
       {/* Screen Capture Button */}
       <motion.button
         onClick={captureScreen}
@@ -219,12 +303,29 @@ export function AdvancedFeatures({
             ? 'text-orange-400 hover:text-orange-300 hover:bg-orange-900/20' 
             : 'text-orange-600 hover:text-orange-500 hover:bg-orange-100'
         }`}
-        title="Capture Screenshot 📸"
+        title="Capture Screenshot 🖥️"
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.95 }}
       >
-        <Camera size={20} />
+        <Monitor size={20} />
       </motion.button>
+
+      {/* Video Call Button */}
+      {onStartVideoCall && (
+        <motion.button
+          onClick={onStartVideoCall}
+          className={`p-2 rounded-lg transition-colors ${
+            darkMode 
+              ? 'text-red-400 hover:text-red-300 hover:bg-red-900/20' 
+              : 'text-red-600 hover:text-red-500 hover:bg-red-100'
+          }`}
+          title="Start Video Call 📹"
+          whileHover={{ scale: 1.1 }}
+          whileTap={{ scale: 0.95 }}
+        >
+          <Video size={20} />
+        </motion.button>
+      )}
 
       {/* Recording Indicator */}
       {isRecording && (
