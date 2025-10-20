@@ -17,19 +17,9 @@ export function Onboarding({ initialAlias, onDone }: Props) {
     setIsLoading(true);
     
     try {
-      // Save alias to backend
-      const { apiSetAlias } = await import('../lib/api');
-      
-      const aliasSuccess = await apiSetAlias(alias.trim());
-      
-      if (aliasSuccess) {
-        // Simulate a brief loading state for better UX
-        await new Promise(resolve => setTimeout(resolve, 500));
-        onDone(alias.trim());
-      } else {
-        alert('Failed to save profile. Please try again.');
-        setIsLoading(false);
-      }
+      // Save alias - will be handled by parent component
+      await new Promise(resolve => setTimeout(resolve, 300));
+      onDone(alias.trim());
     } catch (error) {
       console.error('Profile save failed:', error);
       alert('Failed to save profile. Please try again.');

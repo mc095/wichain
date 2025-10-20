@@ -16,26 +16,31 @@
     display: none !important;
   }
   
-  /* Adjust chat sidebar for mobile - full width overlay */
+  /* Chat sidebar as overlay drawer on mobile */
   .sidebar-mobile {
-    width: 85% !important;
-    max-width: 320px !important;
     position: fixed !important;
     top: 0 !important;
     left: 0 !important;
-    z-index: 1000 !important;
+    z-index: 9999 !important;
     height: 100vh !important;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.5) !important;
+    height: 100dvh !important;
+    max-width: 320px !important;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6) !important;
+    transform: translateX(0) !important;
+    transition: transform 0.3s ease !important;
   }
   
-  /* Main chat area - full width on mobile */
-  .flex.h-screen.overflow-hidden {
-    flex-direction: column !important;
+  /* Hide sidebar when closed on mobile */
+  .sidebar-mobile[style*="width: 0px"] {
+    transform: translateX(-100%) !important;
   }
   
-  /* Make chat area full width when sidebar is closed */
-  .flex-1.flex.flex-col {
-    width: 100% !important;
+  /* Main container - don't let sidebar push content */
+  @media (max-width: 768px) {
+    .flex.h-screen.overflow-hidden > div:not(.w-16):not(.sidebar-mobile) {
+      width: 100% !important;
+      flex: 1 !important;
+    }
   }
   
   /* Mobile chat layout */
@@ -225,6 +230,20 @@
   /* Image preview mobile */
   .max-w-xs {
     max-width: 80vw !important;
+  }
+  
+  /* Fix onboarding slideshow buttons - move to bottom on mobile */
+  .min-h-screen.relative .absolute.top-8 {
+    top: auto !important;
+    bottom: 2rem !important;
+    left: 1rem !important;
+    right: 1rem !important;
+  }
+  
+  /* Ensure buttons are visible on mobile */
+  .min-h-screen.relative .absolute.top-8 button {
+    font-size: 0.875rem !important;
+    padding: 0.5rem 1rem !important;
   }
   
   .max-h-48 {

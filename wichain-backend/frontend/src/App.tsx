@@ -20,7 +20,16 @@ import { ChatView } from './components/ChatView';
 import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
-import { listen } from '@tauri-apps/api/event';
+import { isMobilePlatform, isTauriAvailable, getMockIdentity, shouldShowOnboarding, markOnboardingComplete } from './lib/mobile-detection';
+// Conditional Tauri import - won't crash on mobile
+let tauriListen: any = null;
+try {
+  if (isTauriAvailable()) {
+    tauriListen = require('@tauri-apps/api/event').listen;
+  }
+} catch (e) {
+  console.warn('Tauri not available (running on mobile)');
+}
 import { getRandomProfilePicture } from './utils/profilePictures';
 
 import { motion, AnimatePresence } from 'framer-motion';
@@ -156,11 +165,35 @@ export default function App() {
   }, []);
 
   const loadIdentity = useCallback(async () => {
-    const id = await apiGetIdentity();
-    setIdentity(id);
-    if (id.alias.startsWith('Anon-')) {
+    try {
+      let id;
+      if (isMobilePlatform() && !isTauriAvailable()) {
+        // Mobile without backend - use mock identity
+        const stored = localStorage.getItem('mobile_identity');
+        if (stored) {
+          id = JSON.parse(stored);
+        } else {
+          id = getMockIdentity();
+          localStorage.setItem('mobile_identity', JSON.stringify(id));
+        }
+      } else {
+        // Desktop with Tauri backend
+        id = await apiGetIdentity();
+      }
+      
+      setIdentity(id);
+      
+      // Check if should show onboarding
+      if (shouldShowOnboarding(id.alias)) {
+        setShowSlideshow(true);
+        setCurrentSlide(0);
+      }
+    } catch (error) {
+      console.error('Failed to load identity:', error);
+      // Fallback to mock identity on error
+      const mockId = getMockIdentity();
+      setIdentity(mockId);
       setShowSlideshow(true);
-      setCurrentSlide(0);
     }
   }, []);
 
@@ -186,13 +219,16 @@ export default function App() {
   const [target, setTarget] = useState<Target>(null);
 
   useEffect(() => {
-    const un = listen('alias_update', () => {
-      loadIdentity();
-      refreshGroups();
-    });
-    return () => {
-      un.then((f) => f());
-    };
+    // Only listen to Tauri events on desktop
+    if (tauriListen) {
+      const un = tauriListen('alias_update', () => {
+        loadIdentity();
+        refreshGroups();
+      });
+      return () => {
+        un.then((f: any) => f());
+      };
+    }
   }, [loadIdentity, refreshGroups]);
 
   // Peers
@@ -210,24 +246,39 @@ export default function App() {
 
   useEffect(() => {
     refreshPeers();
-    const unlistenPromise = listen('peer_update', () => {
-      refreshPeers();
-    });
     const interval = setInterval(refreshPeers, 5_000);
+    
+    // Only listen to Tauri events on desktop
+    let unlistenPromise: any = null;
+    if (tauriListen) {
+      unlistenPromise = tauriListen('peer_update', () => {
+        refreshPeers();
+      });
+    }
+    
     return () => {
       clearInterval(interval);
-      unlistenPromise.then((un) => un());
+      if (unlistenPromise) {
+        unlistenPromise.then((un: any) => un());
+      }
     };
   }, [refreshPeers]);
 
   // Groups effect
   useEffect(() => {
     refreshGroups();
-    const unlistenPromise = listen('group_update', () => {
-      refreshGroups();
-    });
+    
+    // Only listen to Tauri events on desktop
+    let unlistenPromise: any = null;
+    if (tauriListen) {
+      unlistenPromise = tauriListen('group_update', () => {
+        refreshGroups();
+      });
+    }
     return () => {
-      unlistenPromise.then((un) => un());
+      if (unlistenPromise) {
+        unlistenPromise.then((un: any) => un());
+      }
     };
   }, [refreshGroups]);
 
@@ -238,13 +289,21 @@ export default function App() {
   }, []);
   useEffect(() => {
     refreshMessages();
-    const unlistenPromise = listen('chat_update', () => {
-      refreshMessages();
-    });
     const interval = setInterval(refreshMessages, 10_000);
+    
+    // Only listen to Tauri events on desktop
+    let unlistenPromise: any = null;
+    if (tauriListen) {
+      unlistenPromise = tauriListen('chat_update', () => {
+        refreshMessages();
+      });
+    }
+    
     return () => {
       clearInterval(interval);
-      unlistenPromise.then((un) => un());
+      if (unlistenPromise) {
+        unlistenPromise.then((un: any) => un());
+      }
     };
   }, [refreshMessages]);
 
@@ -506,16 +565,33 @@ export default function App() {
 
   // Onboarding
   async function onboardingDone(alias: string) {
-    await apiSetAlias(alias);
+    markOnboardingComplete();
     setShowOnboarding(false);
     setShowSlideshow(false);
-    loadIdentity();
+    
+    if (isMobilePlatform() && !isTauriAvailable()) {
+      // Update mobile mock identity
+      const stored = localStorage.getItem('mobile_identity');
+      if (stored) {
+        const id = JSON.parse(stored);
+        id.alias = alias;
+        localStorage.setItem('mobile_identity', JSON.stringify(id));
+        setIdentity(id);
+      }
+    } else {
+      // Update via backend
+      await apiSetAlias(alias);
+      await loadIdentity();
+    }
   }
 
   // Group modal
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const openGroupModal = () => setGroupModalOpen(true);
   const closeGroupModal = () => setGroupModalOpen(false);
+  
+  // Suppress unused warning - openGroupModal will be used for creating groups from peer list
+  void openGroupModal;
   const createGroup = async (memberIds: string[], groupName?: string) => {
     const myPub = identity?.public_key_b64;
     if (!myPub) return;
@@ -577,12 +653,12 @@ export default function App() {
 
         <div className="w-full h-full relative z-10 flex flex-col">
 
-          {/* Navigation Buttons - Corners */}
-          <div className="absolute top-8 left-8 right-8 flex items-center justify-between pointer-events-none">
+          {/* Navigation Buttons - Bottom on mobile, top on desktop */}
+          <div className="fixed md:absolute bottom-8 md:top-8 md:bottom-auto left-4 right-4 md:left-8 md:right-8 flex items-center justify-between gap-2 pointer-events-none z-20">
             <button
               onClick={prevSlide}
               disabled={currentSlide === 0}
-              className="px-6 py-3 bg-white/10 backdrop-blur-sm text-white rounded-full text-sm font-grotesk hover:bg-white/20 disabled:opacity-0 disabled:cursor-not-allowed transition-all duration-300 pointer-events-auto border border-white/20"
+              className="px-4 py-2 md:px-6 md:py-3 bg-white/10 backdrop-blur-sm text-white rounded-full text-xs md:text-sm font-grotesk hover:bg-white/20 disabled:opacity-0 disabled:cursor-not-allowed transition-all duration-300 pointer-events-auto border border-white/20"
               style={{ fontWeight: 400 }}
             >
               ← Previous
@@ -591,7 +667,7 @@ export default function App() {
             <div className="flex-1 flex justify-end">
               <button
                 onClick={nextSlide}
-                className="px-6 py-3 bg-white text-black rounded-full text-sm font-grotesk hover:bg-white/90 transition-all duration-300 pointer-events-auto"
+                className="px-4 py-2 md:px-6 md:py-3 bg-white text-black rounded-full text-xs md:text-sm font-grotesk hover:bg-white/90 transition-all duration-300 pointer-events-auto"
                 style={{ fontWeight: 500 }}
               >
                 {currentSlide === onboardingSlides.length - 1 ? 'Get Started →' : 'Next →'}
@@ -651,6 +727,14 @@ export default function App() {
 
   return (
     <div className={`flex h-screen overflow-hidden mobile-scroll ${darkMode ? 'space-background text-white' : 'light-background text-gray-900'} ${isResizing ? 'select-none' : ''}`}>
+      {/* Mobile Sidebar Backdrop Overlay */}
+      {isMobile && sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-[9998]"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      
       {/* Left Sidebar - Global Navigation */}
       <motion.div
         className={`w-16 backdrop-blur-xl border-r flex flex-col items-center py-4 space-y-4 ${darkMode ? 'bg-slate-800/50 border-slate-700/50' : 'bg-white/50 border-gray-200/50'}`}
@@ -722,7 +806,7 @@ export default function App() {
           className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white border border-white/10"
           whileHover={{ scale: 1.1, rotate: 90 }}
           whileTap={{ scale: 0.95 }}
-          onClick={openGroupModal}
+          onClick={() => setSidebarOpen(true)}
           title="New Chat"
         >
           <Plus size={20} />
@@ -783,9 +867,11 @@ export default function App() {
                 selected={target}
                 onSelectPeer={(id) => {
                   setTarget({ kind: 'peer', id });
+                  if (isMobile) setSidebarOpen(false); // Close sidebar on mobile after selection
                 }}
                 onSelectGroup={(id) => {
                   setTarget({ kind: 'group', id });
+                  if (isMobile) setSidebarOpen(false); // Close sidebar on mobile after selection
                 }}
                 messages={messages}
               />
@@ -965,7 +1051,7 @@ export default function App() {
               <p className={`mb-6 ${darkMode ? 'text-slate-400' : 'text-gray-600'}`}>Select a conversation to start messaging</p>
               <button
                 className="px-6 py-3 bg-white text-black rounded-lg font-grotesk font-medium hover:bg-gray-100 transition-all duration-200 flex items-center space-x-2 mx-auto"
-                onClick={openGroupModal}
+                onClick={() => setSidebarOpen(true)}
               >
                 <Plus size={16} />
                 <span>Start New Chat</span>
