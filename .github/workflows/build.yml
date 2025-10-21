@@ -108,9 +108,15 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo update
 
-      - name: Build Tauri app (using npx - faster!)
-        working-directory: wichain-backend/frontend
-        run: npx @tauri-apps/cli@2.8.0 build
+      - name: Install Tauri CLI (cached)
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: tauri-cli
+          version: '2.8.0'
+
+      - name: Build Tauri app
+        working-directory: wichain-backend/src-tauri
+        run: cargo tauri build
 
       - name: Upload artifacts (Windows)
         if: matrix.platform.os == 'windows-latest'
