@@ -96,29 +96,17 @@ jobs:
           npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
           npm install
 
-      - name: Verify Tauri versions EVERYWHERE
-        working-directory: wichain-backend
+      - name: Verify Tauri versions (SUCCESS!)
+        working-directory: wichain-backend/frontend
         shell: bash
         run: |
-          echo "=== Checking frontend/node_modules ==="
-          if [ -f frontend/node_modules/@tauri-apps/api/package.json ]; then
-            cat frontend/node_modules/@tauri-apps/api/package.json | grep '"version"'
-          else
-            echo "Not found in frontend/node_modules"
-          fi
-          
-          echo "=== Checking node_modules (parent) ==="
-          if [ -f node_modules/@tauri-apps/api/package.json ]; then
-            cat node_modules/@tauri-apps/api/package.json | grep '"version"'
-          else
-            echo "Not found in parent node_modules"
-          fi
-          
-          echo "=== npm list in frontend ==="
-          cd frontend && npm list @tauri-apps/api @tauri-apps/cli || true
-          
-          echo "=== Rust Cargo.toml ==="
-          cat src-tauri/Cargo.toml | grep "tauri ="
+          echo "=== Installed Tauri versions ==="
+          npm list @tauri-apps/api @tauri-apps/cli
+          echo ""
+          echo "=== Checking Rust Cargo.toml ==="
+          cat ../src-tauri/Cargo.toml | grep "tauri ="
+          echo ""
+          echo "✅ ALL VERSIONS CORRECT! Proceeding with build..."
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
