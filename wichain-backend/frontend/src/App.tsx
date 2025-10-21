@@ -442,16 +442,34 @@ export default function App() {
 
     const sosMessage = `🚨🚨🚨 SOS EMERGENCY ALERT 🚨🚨🚨\n\n⚠️ USER NEEDS IMMEDIATE ASSISTANCE!\n⚠️ RESPOND URGENTLY!\n\nTimestamp: ${new Date().toLocaleString()}\nUser: ${identity?.alias || 'Unknown'}\n\n[SOS_ALERT:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
     
-    // Send to current target if available
-    if (target?.kind === 'peer') {
-      await apiAddPeerMessage(sosMessage, target.id);
-    } else if (target?.kind === 'group') {
-      await apiAddGroupMessage(sosMessage, target.id);
+    // 🚨 BROADCAST TO ALL PEERS AND GROUPS
+    let sentCount = 0;
+    
+    // Send to all peers
+    for (const peer of peers) {
+      if (peer.id !== identity?.public_key_b64) { // Don't send to self
+        try {
+          await apiAddPeerMessage(sosMessage, peer.id);
+          sentCount++;
+        } catch (error) {
+          console.error(`Failed to send SOS to peer ${peer.alias}:`, error);
+        }
+      }
+    }
+    
+    // Send to all groups
+    for (const group of groups) {
+      try {
+        await apiAddGroupMessage(sosMessage, group.id);
+        sentCount++;
+      } catch (error) {
+        console.error(`Failed to send SOS to group:`, error);
+      }
     }
     
     refreshMessages();
-    alert('✅ SOS Alert Sent!\nYour emergency message has been broadcast!');
-  }, [target, refreshMessages, identity]);
+    alert(`✅ SOS Alert Sent to ${sentCount} contact(s)!\nYour emergency message has been broadcast!`);
+  }, [peers, groups, identity, refreshMessages]);
 
   // 📢 EMERGENCY BROADCAST TO ALL PEERS
   const handleEmergencyBroadcast = useCallback(async () => {
@@ -461,16 +479,34 @@ export default function App() {
 
     const broadcastMessage = `📢 EMERGENCY BROADCAST 📢\n\nFrom: ${identity?.alias || 'Unknown'}\nTime: ${new Date().toLocaleString()}\n\n${message}\n\n[EMERGENCY_BROADCAST:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
     
-    // Send to current target
-    if (target?.kind === 'peer') {
-      await apiAddPeerMessage(broadcastMessage, target.id);
-    } else if (target?.kind === 'group') {
-      await apiAddGroupMessage(broadcastMessage, target.id);
+    // 📢 BROADCAST TO ALL PEERS AND GROUPS
+    let sentCount = 0;
+    
+    // Send to all peers
+    for (const peer of peers) {
+      if (peer.id !== identity?.public_key_b64) { // Don't send to self
+        try {
+          await apiAddPeerMessage(broadcastMessage, peer.id);
+          sentCount++;
+        } catch (error) {
+          console.error(`Failed to send broadcast to peer ${peer.alias}:`, error);
+        }
+      }
+    }
+    
+    // Send to all groups
+    for (const group of groups) {
+      try {
+        await apiAddGroupMessage(broadcastMessage, group.id);
+        sentCount++;
+      } catch (error) {
+        console.error(`Failed to send broadcast to group:`, error);
+      }
     }
     
     refreshMessages();
-    alert('✅ Emergency Broadcast Sent!');
-  }, [target, refreshMessages, identity]);
+    alert(`✅ Emergency Broadcast Sent to ${sentCount} contact(s)!`);
+  }, [peers, groups, identity, refreshMessages]);
 
   // 🎤 VOICE MESSAGE HANDLER
   const handleVoiceMessage = useCallback(async (audioBlob: Blob, duration: number) => {
