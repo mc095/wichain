@@ -32,11 +32,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete any existing package-lock.json from repo
-        working-directory: wichain-backend/frontend
         shell: bash
         run: |
-          rm -f package-lock.json || true
-          git rm --cached package-lock.json 2>/dev/null || true
+          rm -f wichain-backend/package-lock.json || true
+          rm -f wichain-backend/node_modules/.package-lock.json || true
+          rm -f wichain-backend/frontend/package-lock.json || true
+          git rm --cached wichain-backend/package-lock.json 2>/dev/null || true
+          git rm --cached wichain-backend/node_modules/.package-lock.json 2>/dev/null || true
+          git rm --cached wichain-backend/frontend/package-lock.json 2>/dev/null || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -101,16 +104,13 @@ jobs:
         working-directory: wichain-backend/frontend
         run: npm run build
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '=2.8.0' --locked
-
       - name: Update Cargo dependencies
         working-directory: wichain-backend/src-tauri
         run: cargo update
 
-      - name: Build Tauri app
-        working-directory: wichain-backend/src-tauri
-        run: cargo tauri build
+      - name: Build Tauri app (using npx - faster!)
+        working-directory: wichain-backend/frontend
+        run: npx @tauri-apps/cli@2.8.0 build
 
       - name: Upload artifacts (Windows)
         if: matrix.platform.os == 'windows-latest'
