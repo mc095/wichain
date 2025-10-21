@@ -18,7 +18,6 @@ interface Props {
   aliasMap: Record<string, string>;
   groups: GroupInfo[];
   searchQuery: string;
-  onVideoCallAccept?: (callData: any) => void;
 }
 
 export function ChatView({
@@ -27,8 +26,7 @@ export function ChatView({
   selectedTarget,
   aliasMap,
   groups,
-  searchQuery,
-  onVideoCallAccept
+  searchQuery
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -419,51 +417,6 @@ export function ChatView({
                                           <span className="text-xs font-bold text-yellow-300">EMERGENCY BROADCAST</span>
                                         </div>
                                         <p className="text-sm leading-relaxed whitespace-pre-wrap text-white">{textWithoutEmergency}</p>
-                                      </motion.div>
-                                    </motion.div>
-                                  );
-                                }
-
-                                // 📹 VIDEO CALL REQUEST
-                                const videoCallMatch = message.text.match(/\[VIDEO_CALL_REQUEST:(.+?)\]/);
-                                if (videoCallMatch) {
-                                  const textWithoutCall = message.text.replace(/\[VIDEO_CALL_REQUEST:.+?\]/, '').trim();
-                                  const callData = JSON.parse(videoCallMatch[1]);
-                                  const isIncoming = message.from !== myPubkeyB64;
-                                  
-                                  return (
-                                    <motion.div 
-                                      className="space-y-2"
-                                      initial={{ opacity: 0, scale: 0.95 }}
-                                      animate={{ opacity: 1, scale: 1 }}
-                                      transition={{ duration: 0.3 }}
-                                    >
-                                      <motion.div 
-                                        className="bg-blue-900/30 rounded-lg p-3 border border-blue-500/50"
-                                        whileHover={{ scale: 1.02 }}
-                                        transition={{ type: "spring", stiffness: 300 }}
-                                      >
-                                        <div className="flex items-center space-x-2 mb-2">
-                                          <span className="text-xl">📹</span>
-                                          <span className="text-xs font-bold text-blue-300">VIDEO CALL REQUEST</span>
-                                        </div>
-                                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-white">{textWithoutCall}</p>
-                                        <div className="mt-2 text-xs text-blue-200">
-                                          🎥 WebRTC P2P • ✅ Encrypted • ✅ Offline LAN
-                                        </div>
-                                        
-                                        {/* Accept button for incoming calls */}
-                                        {isIncoming && onVideoCallAccept && (
-                                          <motion.button
-                                            onClick={() => onVideoCallAccept(callData)}
-                                            className="mt-3 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg flex items-center justify-center space-x-2 transition-colors"
-                                            whileHover={{ scale: 1.05 }}
-                                            whileTap={{ scale: 0.95 }}
-                                          >
-                                            <span>📹</span>
-                                            <span>Accept Video Call</span>
-                                          </motion.button>
-                                        )}
                                       </motion.div>
                                     </motion.div>
                                   );

@@ -20,7 +20,6 @@ import { GroupModal } from './components/GroupModal';
 import { Onboarding } from './components/Onboarding';
 import { ResetConfirm } from './components/ResetConfirm';
 import { AdvancedFeatures } from './components/AdvancedFeatures';
-import { VideoCallWindow } from './components/VideoCallWindow';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import { getRandomProfilePicture } from './utils/profilePictures';
 
@@ -93,12 +92,6 @@ export default function App() {
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editAlias, setEditAlias] = useState('');
   const [appStartTime] = useState(Date.now());
-  
-  // Video call state
-  const [videoCallOpen, setVideoCallOpen] = useState(false);
-  const [videoCallPeer, setVideoCallPeer] = useState<string>('');
-  const [videoCallInitiator, setVideoCallInitiator] = useState(false);
-  const [videoCallSignal, setVideoCallSignal] = useState<any>(null);
 
   const nextSlide = () => {
     if (currentSlide < onboardingSlides.length - 1) {
@@ -291,23 +284,6 @@ export default function App() {
       }
     };
   }, [refreshMessages, tauriListen]);
-
-  // Listen for incoming WebRTC signals in messages
-  useEffect(() => {
-    const latestMessage = messages[messages.length - 1];
-    if (!latestMessage || !target || target.kind !== 'peer') return;
-    
-    // Check for WebRTC signal in latest message
-    const signalMatch = latestMessage.text.match(/\[WEBRTC_SIGNAL:(.+?)\]/);
-    if (signalMatch && latestMessage.from === target.id) {
-      try {
-        const signal = JSON.parse(signalMatch[1]);
-        setVideoCallSignal(signal);
-      } catch (e) {
-        console.error('Failed to parse WebRTC signal:', e);
-      }
-    }
-  }, [messages, target]);
 
   // Compose / Send
   const [text, setText] = useState('');
@@ -580,54 +556,6 @@ export default function App() {
     }
     refreshMessages();
   }, [target, refreshMessages]);
-
-  // 📹 VIDEO CALL HANDLER (WebRTC P2P!)
-  const handleVideoCall = useCallback(async () => {
-    if (!target) {
-      alert('⚠️ Please select a contact first to start a video call!');
-      return;
-    }
-
-    if (target.kind !== 'peer') {
-      alert('⚠️ Video calls only work for direct peer-to-peer chats!');
-      return;
-    }
-
-    const confirmed = window.confirm('📹 START VIDEO CALL?\n\n🎥 Real WebRTC P2P Video Call\n✅ Live camera & audio streaming\n✅ End-to-end encrypted\n✅ Works offline on LAN\n✅ No servers needed\n\nStart call now?');
-    
-    if (!confirmed) return;
-
-    // Send video call invitation
-    const callMessage = `📹 VIDEO CALL REQUEST 📹\n\nFrom: ${identity?.alias || 'Unknown'}\nTime: ${new Date().toLocaleString()}\n\n🎥 Requesting LIVE video call...\nClick to accept!\n\n[VIDEO_CALL_REQUEST:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias, targetId: target.id })}]`;
-    
-    await apiAddPeerMessage(callMessage, target.id);
-    refreshMessages();
-
-    // Open video call window as initiator
-    const peerName = peers.find(p => p.id === target.id)?.alias || target.id.slice(0, 8);
-    setVideoCallPeer(peerName);
-    setVideoCallInitiator(true);
-    setVideoCallOpen(true);
-  }, [target, identity, refreshMessages, peers]);
-
-  // 📹 VIDEO CALL ACCEPT HANDLER
-  const handleVideoCallAccept = useCallback(async (callData: any) => {
-    if (!target || target.kind !== 'peer') return;
-    
-    const confirmed = window.confirm(`📹 ACCEPT VIDEO CALL?\n\nFrom: ${callData.userId || 'Unknown'}\n\n🎥 Real WebRTC P2P video call\n✅ Live camera & audio\n✅ End-to-end encrypted\n✅ Works offline on LAN\n\nAccept call?`);
-    
-    if (!confirmed) return;
-
-    // Send acceptance and open video window
-    const acceptMessage = `✅ VIDEO CALL ACCEPTED\n\nCall started at: ${new Date().toLocaleString()}\n\n[VIDEO_CALL_ACCEPTED:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
-    await apiAddPeerMessage(acceptMessage, target.id);
-    refreshMessages();
-
-    // Open video call window as receiver
-    setVideoCallPeer(callData.userId || 'Peer');
-    setVideoCallInitiator(false);
-    setVideoCallOpen(true);
-  }, [target, identity, refreshMessages]);
 
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
@@ -1107,7 +1035,6 @@ export default function App() {
                 aliasMap={aliasMap}
                 groups={groups}
                 searchQuery={searchQuery}
-                onVideoCallAccept={handleVideoCallAccept}
               />
             </div>
 
@@ -1151,7 +1078,6 @@ export default function App() {
                   onSendFile={handleFileShare}
                   onSendScreenshot={handleScreenshot}
                   onSendPhoto={handlePhotoCapture}
-                  onStartVideoCall={handleVideoCall}
                   darkMode={darkMode}
                 />
 
@@ -1243,22 +1169,6 @@ export default function App() {
         peers={displayedPeers}
         aliasMap={aliasMap}
         onCreateGroup={createGroup}
-      />
-
-      {/* Video Call Window */}
-      <VideoCallWindow
-        isOpen={videoCallOpen}
-        onClose={() => setVideoCallOpen(false)}
-        peerAlias={videoCallPeer}
-        isInitiator={videoCallInitiator}
-        onSignal={(signalData) => {
-          // Send WebRTC signal via WiChain message
-          if (target && target.kind === 'peer') {
-            const signalMsg = `[WEBRTC_SIGNAL:${JSON.stringify(signalData)}]`;
-            apiAddPeerMessage(signalMsg, target.id).catch(console.error);
-          }
-        }}
-        incomingSignal={videoCallSignal}
       />
 
       {/* Settings Modal */}
