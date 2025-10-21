@@ -1,5 +1,14 @@
 /* ❌ REMOVED: External font CDNs (require internet)
-   ✅ NOW USING: System fonts for 100% offline functionality */
+   ✅ NOW USING: System fonts + Local Doto font for 100% offline functionality */
+
+/* Load Doto font from local file */
+@font-face {
+  font-family: 'Doto';
+  src: url('/fonts/Doto_Rounded-SemiBold.ttf') format('truetype');
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
 
 @import "tailwindcss";
 

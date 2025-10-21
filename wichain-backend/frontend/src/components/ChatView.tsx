@@ -18,6 +18,7 @@ interface Props {
   aliasMap: Record<string, string>;
   groups: GroupInfo[];
   searchQuery: string;
+  onVideoCallAccept?: (callData: any) => void;
 }
 
 export function ChatView({
@@ -26,7 +27,8 @@ export function ChatView({
   selectedTarget,
   aliasMap,
   groups,
-  searchQuery
+  searchQuery,
+  onVideoCallAccept
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -426,6 +428,8 @@ export function ChatView({
                                 const videoCallMatch = message.text.match(/\[VIDEO_CALL_REQUEST:(.+?)\]/);
                                 if (videoCallMatch) {
                                   const textWithoutCall = message.text.replace(/\[VIDEO_CALL_REQUEST:.+?\]/, '').trim();
+                                  const callData = JSON.parse(videoCallMatch[1]);
+                                  const isIncoming = message.from !== myPubkeyB64;
                                   
                                   return (
                                     <motion.div 
@@ -447,6 +451,19 @@ export function ChatView({
                                         <div className="mt-2 text-xs text-blue-200">
                                           🎥 WebRTC P2P • ✅ Encrypted • ✅ Offline LAN
                                         </div>
+                                        
+                                        {/* Accept button for incoming calls */}
+                                        {isIncoming && onVideoCallAccept && (
+                                          <motion.button
+                                            onClick={() => onVideoCallAccept(callData)}
+                                            className="mt-3 w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg flex items-center justify-center space-x-2 transition-colors"
+                                            whileHover={{ scale: 1.05 }}
+                                            whileTap={{ scale: 0.95 }}
+                                          >
+                                            <span>📹</span>
+                                            <span>Accept Video Call</span>
+                                          </motion.button>
+                                        )}
                                       </motion.div>
                                     </motion.div>
                                   );

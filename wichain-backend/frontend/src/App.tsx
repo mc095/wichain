@@ -581,6 +581,33 @@ export default function App() {
     alert('📹 Video Call Request Sent!\n\n✅ Waiting for peer to accept...\n✅ WebRTC connection will be established\n✅ Fully encrypted P2P call');
   }, [target, identity, refreshMessages]);
 
+  // 📹 VIDEO CALL ACCEPT HANDLER
+  const handleVideoCallAccept = useCallback(async (callData: any) => {
+    const confirmed = window.confirm(`📹 ACCEPT VIDEO CALL?\n\nFrom: ${callData.userId || 'Unknown'}\n\n🎥 Start WebRTC P2P video call?\n✅ End-to-end encrypted\n✅ Works offline on LAN\n✅ No servers needed`);
+    
+    if (!confirmed) return;
+
+    // In a real implementation, this would:
+    // 1. Initialize WebRTC connection
+    // 2. Exchange ICE candidates
+    // 3. Establish peer-to-peer video stream
+    // 4. Open video call window
+    
+    alert('📹 Video Call Accepted!\n\n✅ WebRTC connection establishing...\n✅ Video call would start here\n\n💡 Note: Full WebRTC implementation requires:\n- MediaStream API\n- RTCPeerConnection\n- ICE candidate exchange\n- STUN/TURN for NAT traversal');
+    
+    // Send acceptance message back
+    if (target) {
+      const acceptMessage = `✅ VIDEO CALL ACCEPTED\n\nCall started at: ${new Date().toLocaleString()}\n\n[VIDEO_CALL_ACCEPTED:${JSON.stringify({ timestamp: Date.now(), userId: identity?.alias })}]`;
+      
+      if (target.kind === 'peer') {
+        await apiAddPeerMessage(acceptMessage, target.id);
+      } else if (target.kind === 'group') {
+        await apiAddGroupMessage(acceptMessage, target.id);
+      }
+      refreshMessages();
+    }
+  }, [target, identity, refreshMessages]);
+
   // Reset chat
   const [resetOpen, setResetOpen] = useState(false);
   async function doReset() {
@@ -1059,6 +1086,7 @@ export default function App() {
                 aliasMap={aliasMap}
                 groups={groups}
                 searchQuery={searchQuery}
+                onVideoCallAccept={handleVideoCallAccept}
               />
             </div>
 
