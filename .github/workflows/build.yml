@@ -31,6 +31,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Delete any existing package-lock.json from repo
+        working-directory: wichain-backend/frontend
+        shell: bash
+        run: |
+          rm -f package-lock.json || true
+          git rm --cached package-lock.json 2>/dev/null || true
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -61,11 +68,21 @@ jobs:
             wget \
             file
 
-      - name: Clean npm cache and lockfile
+      - name: Clean npm cache and lockfile (Unix)
+        if: runner.os != 'Windows'
         working-directory: wichain-backend/frontend
         run: |
-          rm -f package-lock.json
-          rm -rf node_modules
+          rm -f package-lock.json || true
+          rm -rf node_modules || true
+          npm cache clean --force
+          
+      - name: Clean npm cache and lockfile (Windows)
+        if: runner.os == 'Windows'
+        working-directory: wichain-backend/frontend
+        shell: pwsh
+        run: |
+          if (Test-Path package-lock.json) { Remove-Item package-lock.json -Force }
+          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
           npm cache clean --force
           
       - name: Install frontend dependencies
@@ -85,7 +102,7 @@ jobs:
         run: npm run build
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2'
+        run: cargo install tauri-cli --version '=2.8.0' --locked
 
       - name: Update Cargo dependencies
         working-directory: wichain-backend/src-tauri
