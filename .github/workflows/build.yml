@@ -155,12 +155,22 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Display artifact structure
+        run: |
+          echo "Downloaded artifacts:"
+          ls -R artifacts/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -170,7 +180,58 @@ jobs:
             artifacts/wichain-linux/**/*.deb
             artifacts/wichain-linux/**/*.AppImage
             artifacts/wichain-macos/**/*.dmg
+          body: |
+            # 🎉 WiChain ${{ github.ref_name }}
+            
+            ## 📦 Downloads
+            
+            ### Windows
+            - **wichain_${{ github.ref_name }}_x64.msi** - Windows 10/11 installer (64-bit)
+            
+            ### Linux
+            - **wichain_${{ github.ref_name }}_amd64.deb** - Debian/Ubuntu package
+            - **wichain_${{ github.ref_name }}_amd64.AppImage** - Universal Linux binary (no installation required)
+            
+            ### macOS
+            - **wichain_${{ github.ref_name }}_x64.dmg** - macOS Intel installer
+            
+            ## 🚀 Installation
+            
+            ### Windows
+            1. Download the `.msi` file
+            2. Double-click to install
+            3. Follow the installation wizard
+            
+            ### Linux (DEB)
+            ```bash
+            sudo dpkg -i wichain_${{ github.ref_name }}_amd64.deb
+            sudo apt-get install -f  # Fix dependencies if needed
+            ```
+            
+            ### Linux (AppImage)
+            ```bash
+            chmod +x wichain_${{ github.ref_name }}_amd64.AppImage
+            ./wichain_${{ github.ref_name }}_amd64.AppImage
+            ```
+            
+            ### macOS
+            1. Download the `.dmg` file
+            2. Open the DMG
+            3. Drag WiChain to Applications folder
+            
+            ## 📝 What's New
+            
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            
+            ## 🐛 Report Issues
+            
+            Found a bug? [Open an issue](https://github.com/${{ github.repository }}/issues/new)
+            
+            ---
+            
+            Built with ❤️ using Tauri 2.8.0
           draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
