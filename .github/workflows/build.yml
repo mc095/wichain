@@ -71,26 +71,28 @@ jobs:
             wget \
             file
 
-      - name: Clean npm cache and lockfile (Unix)
+      - name: FORCE clean all npm files (Unix)
         if: runner.os != 'Windows'
         working-directory: wichain-backend/frontend
         run: |
-          rm -f package-lock.json || true
-          rm -rf node_modules || true
+          rm -rf package-lock.json node_modules .package-lock.json 2>/dev/null || true
           npm cache clean --force
           
-      - name: Clean npm cache and lockfile (Windows)
+      - name: FORCE clean all npm files (Windows)
         if: runner.os == 'Windows'
         working-directory: wichain-backend/frontend
         shell: pwsh
         run: |
-          if (Test-Path package-lock.json) { Remove-Item package-lock.json -Force }
-          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force }
+          Get-ChildItem -Filter "package-lock.json" -Recurse -Force | Remove-Item -Force -ErrorAction SilentlyContinue
+          Get-ChildItem -Filter ".package-lock.json" -Recurse -Force | Remove-Item -Force -ErrorAction SilentlyContinue
+          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue }
           npm cache clean --force
           
-      - name: Install frontend dependencies
+      - name: Install EXACT Tauri versions (2.8.0)
         working-directory: wichain-backend/frontend
-        run: npm install
+        run: |
+          npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
+          npm install
 
       - name: Verify Tauri versions
         working-directory: wichain-backend/frontend
