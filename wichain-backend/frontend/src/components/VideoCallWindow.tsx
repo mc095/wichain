@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Mic, MicOff, Video, VideoOff, Phone } from 'lucide-react';
-// @ts-ignore - Install with: npm install simple-peer @types/simple-peer
-import Peer from 'simple-peer';
 
 interface Props {
   isOpen: boolean;
@@ -22,13 +20,14 @@ export function VideoCallWindow({
   incomingSignal
 }: Props) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [peer, setPeer] = useState<any | null>(null);
+  const [peerConnection, setPeerConnection] = useState<RTCPeerConnection | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'failed'>('connecting');
   
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const hasCreatedOffer = useRef(false);
 
   // Initialize local media stream
   useEffect(() => {
@@ -61,75 +60,126 @@ export function VideoCallWindow({
         localStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [isOpen]);
+  }, [isOpen, onClose]);
 
   // Initialize WebRTC peer connection
   useEffect(() => {
-    if (!localStream || peer) return;
+    if (!localStream || peerConnection) return;
 
-    try {
-      const newPeer = new Peer({
-        initiator: isInitiator,
-        stream: localStream,
-        trickle: true,
-        config: {
-          // LAN-only config (no STUN/TURN servers needed for same network!)
-          iceServers: [
-            // Optional: Can work without this on LAN
-            { urls: 'stun:stun.l.google.com:19302' }
-          ]
-        }
-      });
+    const config: RTCConfiguration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
 
-      // Send signaling data to peer via WiChain messages
-      newPeer.on('signal', (data: any) => {
-        console.log('📡 Sending signal data:', data.type);
-        onSignal(data);
-      });
+    const pc = new RTCPeerConnection(config);
 
-      // Receive remote video stream
-      newPeer.on('stream', (remoteStream: MediaStream) => {
-        console.log('📹 Received remote stream!');
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStream;
-        }
+    // Add local stream tracks to connection
+    localStream.getTracks().forEach(track => {
+      pc.addTrack(track, localStream);
+    });
+
+    // Handle incoming tracks (remote video/audio)
+    pc.ontrack = (event) => {
+      console.log('📹 Received remote track!');
+      if (remoteVideoRef.current && event.streams[0]) {
+        remoteVideoRef.current.srcObject = event.streams[0];
         setConnectionState('connected');
-      });
+      }
+    };
 
-      // Handle connection state
-      newPeer.on('connect', () => {
-        console.log('✅ WebRTC connection established!');
-        setConnectionState('connected');
-      });
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log('📡 Sending ICE candidate');
+        onSignal({
+          type: 'candidate',
+          candidate: event.candidate
+        });
+      }
+    };
 
-      newPeer.on('error', (err: Error) => {
-        console.error('❌ WebRTC error:', err);
+    // Handle connection state changes
+    pc.onconnectionstatechange = () => {
+      console.log('🔄 Connection state:', pc.connectionState);
+      switch (pc.connectionState) {
+        case 'connected':
+          setConnectionState('connected');
+          break;
+        case 'failed':
+        case 'disconnected':
+          setConnectionState('failed');
+          break;
+      }
+    };
+
+    // Handle ICE connection state
+    pc.oniceconnectionstatechange = () => {
+      console.log('🧊 ICE state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
         setConnectionState('failed');
-      });
+      }
+    };
 
-      newPeer.on('close', () => {
-        console.log('📴 WebRTC connection closed');
-        onClose();
-      });
+    setPeerConnection(pc);
 
-      setPeer(newPeer);
-    } catch (error) {
-      console.error('Failed to create peer:', error);
-      setConnectionState('failed');
+    // If initiator, create offer
+    if (isInitiator && !hasCreatedOffer.current) {
+      hasCreatedOffer.current = true;
+      pc.createOffer()
+        .then(offer => {
+          console.log('📤 Created offer');
+          return pc.setLocalDescription(offer);
+        })
+        .then(() => {
+          onSignal({
+            type: 'offer',
+            sdp: pc.localDescription
+          });
+        })
+        .catch(err => {
+          console.error('❌ Error creating offer:', err);
+          setConnectionState('failed');
+        });
     }
-  }, [localStream, isInitiator, onSignal]);
+
+    return () => {
+      pc.close();
+    };
+  }, [localStream, peerConnection, isInitiator, onSignal]);
 
   // Handle incoming signaling data
   useEffect(() => {
-    if (incomingSignal && peer && !peer.destroyed) {
+    if (!incomingSignal || !peerConnection) return;
+
+    const handleSignal = async () => {
       try {
-        console.log('📡 Received signal data:', incomingSignal.type);
-        peer.signal(incomingSignal);
+        if (incomingSignal.type === 'offer') {
+          console.log('📥 Received offer');
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(incomingSignal.sdp));
+          
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
+          
+          console.log('📤 Sending answer');
+          onSignal({
+            type: 'answer',
+            sdp: peerConnection.localDescription
+          });
+        } else if (incomingSignal.type === 'answer') {
+          console.log('📥 Received answer');
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(incomingSignal.sdp));
+        } else if (incomingSignal.type === 'candidate' && incomingSignal.candidate) {
+          console.log('📥 Received ICE candidate');
+          await peerConnection.addIceCandidate(new RTCIceCandidate(incomingSignal.candidate));
+        }
       } catch (error) {
-        console.error('Error processing signal:', error);
+        console.error('❌ Error handling signal:', error);
       }
-    }
-  }, [incomingSignal, peer]);
+    };
+
+    handleSignal();
+  }, [incomingSignal, peerConnection, onSignal]);
 
   // Toggle microphone
   const toggleMic = useCallback(() => {
@@ -155,14 +205,14 @@ export function VideoCallWindow({
 
   // End call
   const endCall = useCallback(() => {
-    if (peer) {
-      peer.destroy();
+    if (peerConnection) {
+      peerConnection.close();
     }
     if (localStream) {
       localStream.getTracks().forEach(track => track.stop());
     }
     onClose();
-  }, [peer, localStream, onClose]);
+  }, [peerConnection, localStream, onClose]);
 
   if (!isOpen) return null;
 
@@ -303,7 +353,7 @@ export function VideoCallWindow({
 
           {/* Status Info */}
           <div className="mt-2 text-center text-xs text-slate-500">
-            🎥 WebRTC P2P Video Call • ✅ End-to-End Encrypted • 🌐 Offline LAN Mode
+            🎥 Native WebRTC P2P • ✅ End-to-End Encrypted • 🌐 Offline LAN Mode
           </div>
         </motion.div>
       </motion.div>

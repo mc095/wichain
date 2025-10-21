@@ -18,11 +18,6 @@ export default defineConfig({
     minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG
   },
-  // Fix for simple-peer: Define global for Node.js polyfills
-  define: {
-    global: 'globalThis',
-    'process.env': {}
-  },
   plugins: [
     react(),
     tailwindcss(),
