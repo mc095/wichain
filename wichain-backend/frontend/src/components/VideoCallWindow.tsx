@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Mic, MicOff, Video, VideoOff, Phone } from 'lucide-react';
 // @ts-ignore - Install with: npm install simple-peer @types/simple-peer
-import SimplePeer from 'simple-peer';
+import Peer from 'simple-peer';
 
 interface Props {
   isOpen: boolean;
@@ -22,7 +22,7 @@ export function VideoCallWindow({
   incomingSignal
 }: Props) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [peer, setPeer] = useState<SimplePeer.Instance | null>(null);
+  const [peer, setPeer] = useState<any | null>(null);
   const [micEnabled, setMicEnabled] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'failed'>('connecting');
@@ -68,7 +68,7 @@ export function VideoCallWindow({
     if (!localStream || peer) return;
 
     try {
-      const newPeer = new SimplePeer({
+      const newPeer = new Peer({
         initiator: isInitiator,
         stream: localStream,
         trickle: true,
@@ -82,7 +82,7 @@ export function VideoCallWindow({
       });
 
       // Send signaling data to peer via WiChain messages
-      newPeer.on('signal', (data: SimplePeer.SignalData) => {
+      newPeer.on('signal', (data: any) => {
         console.log('📡 Sending signal data:', data.type);
         onSignal(data);
       });
