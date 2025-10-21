@@ -161,7 +161,7 @@ export default function App() {
       setIdentity(id);
       
       // Check if should show onboarding
-      if (!id.alias || id.alias === 'Anonymous') {
+      if (!id.alias || id.alias === 'Anonymous' || id.alias.startsWith('Anon-')) {
         setShowSlideshow(true);
         setCurrentSlide(0);
       }
