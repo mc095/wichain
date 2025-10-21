@@ -31,15 +31,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Delete any existing package-lock.json from repo
+      - name: NUKE all lockfiles and node_modules from repo
         shell: bash
         run: |
-          rm -f wichain-backend/package-lock.json || true
-          rm -f wichain-backend/node_modules/.package-lock.json || true
-          rm -f wichain-backend/frontend/package-lock.json || true
+          echo "=== Nuking all npm artifacts ==="
+          find wichain-backend -name "package-lock.json" -type f -delete 2>/dev/null || true
+          find wichain-backend -name ".package-lock.json" -type f -delete 2>/dev/null || true
+          find wichain-backend -name "node_modules" -type d -exec rm -rf {} + 2>/dev/null || true
+          git rm --cached -r wichain-backend/node_modules 2>/dev/null || true
           git rm --cached wichain-backend/package-lock.json 2>/dev/null || true
-          git rm --cached wichain-backend/node_modules/.package-lock.json 2>/dev/null || true
           git rm --cached wichain-backend/frontend/package-lock.json 2>/dev/null || true
+          echo "=== Cleanup complete ==="
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -73,19 +75,19 @@ jobs:
 
       - name: FORCE clean all npm files (Unix)
         if: runner.os != 'Windows'
-        working-directory: wichain-backend/frontend
+        working-directory: wichain-backend
         run: |
           rm -rf package-lock.json node_modules .package-lock.json 2>/dev/null || true
+          rm -rf frontend/package-lock.json frontend/node_modules frontend/.package-lock.json 2>/dev/null || true
           npm cache clean --force
           
       - name: FORCE clean all npm files (Windows)
         if: runner.os == 'Windows'
-        working-directory: wichain-backend/frontend
+        working-directory: wichain-backend
         shell: pwsh
         run: |
-          Get-ChildItem -Filter "package-lock.json" -Recurse -Force | Remove-Item -Force -ErrorAction SilentlyContinue
-          Get-ChildItem -Filter ".package-lock.json" -Recurse -Force | Remove-Item -Force -ErrorAction SilentlyContinue
-          if (Test-Path node_modules) { Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue }
+          Remove-Item -Path "package-lock.json","node_modules",".package-lock.json" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -Path "frontend/package-lock.json","frontend/node_modules","frontend/.package-lock.json" -Recurse -Force -ErrorAction SilentlyContinue
           npm cache clean --force
           
       - name: Install EXACT Tauri versions (2.8.0)
@@ -94,13 +96,29 @@ jobs:
           npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
           npm install
 
-      - name: Verify Tauri versions
-        working-directory: wichain-backend/frontend
+      - name: Verify Tauri versions EVERYWHERE
+        working-directory: wichain-backend
+        shell: bash
         run: |
-          echo "NPM Tauri versions:"
-          npm list @tauri-apps/api @tauri-apps/cli
-          echo "Rust Cargo.toml:"
-          cat ../src-tauri/Cargo.toml | grep "tauri ="
+          echo "=== Checking frontend/node_modules ==="
+          if [ -f frontend/node_modules/@tauri-apps/api/package.json ]; then
+            cat frontend/node_modules/@tauri-apps/api/package.json | grep '"version"'
+          else
+            echo "Not found in frontend/node_modules"
+          fi
+          
+          echo "=== Checking node_modules (parent) ==="
+          if [ -f node_modules/@tauri-apps/api/package.json ]; then
+            cat node_modules/@tauri-apps/api/package.json | grep '"version"'
+          else
+            echo "Not found in parent node_modules"
+          fi
+          
+          echo "=== npm list in frontend ==="
+          cd frontend && npm list @tauri-apps/api @tauri-apps/cli || true
+          
+          echo "=== Rust Cargo.toml ==="
+          cat src-tauri/Cargo.toml | grep "tauri ="
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
