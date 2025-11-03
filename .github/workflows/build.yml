@@ -2,8 +2,10 @@ name: Build WiChain for All Platforms
 
 on:
   push:
+    branches:
+      - "**"
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -15,15 +17,12 @@ jobs:
           - os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             artifact_name: wichain-windows
-            artifact_ext: .msi
           - os: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             artifact_name: wichain-linux
-            artifact_ext: .deb
           - os: macos-latest
             rust_target: x86_64-apple-darwin
             artifact_name: wichain-macos
-            artifact_ext: .dmg
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -75,7 +74,7 @@ jobs:
             wget \
             file
 
-      - name: FORCE clean all npm files (Unix)
+      - name: Clean npm artifacts (Unix)
         if: runner.os != 'Windows'
         working-directory: wichain-backend
         run: |
@@ -83,7 +82,7 @@ jobs:
           rm -rf frontend/package-lock.json frontend/node_modules frontend/.package-lock.json 2>/dev/null || true
           npm cache clean --force
 
-      - name: FORCE clean all npm files (Windows)
+      - name: Clean npm artifacts (Windows)
         if: runner.os == 'Windows'
         working-directory: wichain-backend
         shell: pwsh
@@ -98,17 +97,16 @@ jobs:
           npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
           npm install
 
-      - name: Verify Tauri versions (SUCCESS!)
+      - name: Verify Tauri versions
         working-directory: wichain-backend/frontend
-        shell: bash
         run: |
           echo "=== Installed Tauri versions ==="
           npm list @tauri-apps/api @tauri-apps/cli || true
           echo ""
-          echo "=== Checking Rust Cargo.toml ==="
-          cat ../src-tauri/Cargo.toml | grep "tauri =" || true
+          echo "=== Checking Cargo.toml ==="
+          grep "tauri =" ../src-tauri/Cargo.toml || true
           echo ""
-          echo "✅ Proceeding with build..."
+          echo "✅ All good!"
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
@@ -118,7 +116,7 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo update
 
-      - name: Install Tauri CLI (cached)
+      - name: Install Tauri CLI
         uses: baptiste0928/cargo-install@v3
         with:
           crate: tauri-cli
@@ -128,65 +126,12 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo tauri build
 
-      # Debug: show bundle contents (cross-platform)
-      - name: Show bundle directory (debug)
-        shell: bash
+      - name: Show build outputs (debug)
         run: |
-          B="wichain-backend/src-tauri/target/release/bundle"
-          echo "Listing: $B"
-          if [ -d "$B" ]; then
-            find "$B" -maxdepth 4 -type f -print || true
-          else
-            echo "$B does not exist"
-          fi
+          echo "=== Bundle outputs ==="
+          find wichain-backend/src-tauri/target/release/bundle -type f || true
 
-      # Artifact detection & upload (Unix)
-      - name: Check for build artifacts (Unix)
-        if: runner.os != 'Windows'
-        id: artifact-check-unix
-        shell: bash
-        run: |
-          B="wichain-backend/src-tauri/target/release/bundle"
-          if [ -d "$B" ] && [ "$(find "$B" -type f | wc -l)" -gt 0 ]; then
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "Found files:"
-            find "$B" -type f -maxdepth 4 -print
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "No artifacts found in $B"
-          fi
-
-      - name: Upload artifacts (Unix)
-        if: runner.os != 'Windows' && steps.artifact-check-unix.outputs.found == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform.artifact_name }}-${{ github.ref_name }}
-          path: wichain-backend/src-tauri/target/release/bundle/**
-
-      # Artifact detection & upload (Windows)
-      - name: Check for build artifacts (Windows)
-        if: runner.os == 'Windows'
-        id: artifact-check-win
-        shell: pwsh
-        run: |
-          $bundle = "wichain-backend\src-tauri\target\release\bundle"
-          if (Test-Path $bundle) {
-            $files = Get-ChildItem -Path $bundle -Recurse -File -ErrorAction SilentlyContinue
-            if ($files.Count -gt 0) {
-              echo "found=true" >> $env:GITHUB_OUTPUT
-              Write-Host "Found files:"
-              $files | ForEach-Object { Write-Host $_.FullName }
-            } else {
-              echo "found=false" >> $env:GITHUB_OUTPUT
-              Write-Host "No files inside $bundle"
-            }
-          } else {
-            echo "found=false" >> $env:GITHUB_OUTPUT
-            Write-Host "$bundle does not exist"
-          }
-
-      - name: Upload artifacts (Windows)
-        if: runner.os == 'Windows' && steps.artifact-check-win.outputs.found == 'true'
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}-${{ github.ref_name }}
@@ -195,7 +140,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
@@ -209,71 +153,39 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Display artifact structure (debug)
+      - name: Display downloaded files
         run: |
-          echo "Downloaded artifacts root:"
-          if [ -d artifacts ]; then
-            ls -R artifacts || true
-          else
-            echo "artifacts/ directory not found - no artifacts were downloaded."
-            exit 1
-          fi
+          echo "=== Artifacts downloaded ==="
+          ls -R artifacts || echo "⚠️ No artifacts found!"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Be broad on the patterns so we pick up the uploaded artifact directories
+          name: WiChain-${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/**/**/*.msi
-            artifacts/**/**/*.deb
-            artifacts/**/**/*.AppImage
-            artifacts/**/**/*.dmg
+            artifacts/**/*.msi
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.dmg
           body: |
-            # 🎉 WiChain ${{ github.ref_name }}
+            # 🚀 WiChain Build — `${{ github.ref_name }}`
+            
+            This release was automatically created from a push to `${{ github.ref_name }}`.
 
             ## 📦 Downloads
 
-            ### Windows
-            - **wichain_${{ github.ref_name }}_x64.msi** - Windows 10/11 installer (64-bit)
+            **Windows (.msi)**  
+            **Linux (.deb / .AppImage)**  
+            **macOS (.dmg)**
 
-            ### Linux
-            - **wichain_${{ github.ref_name }}_amd64.deb** - Debian/Ubuntu package
-            - **wichain_${{ github.ref_name }}_amd64.AppImage** - Universal Linux binary (no install)
-
-            ### macOS
-            - **wichain_${{ github.ref_name }}_x64.dmg** - macOS Intel installer
-
-            ## 🚀 Installation
-            ### Windows
-            1. Download the `.msi` file
-            2. Double-click to install
-            3. Follow the wizard
-
-            ### Linux (DEB)
-            ```bash
-            sudo dpkg -i wichain_${{ github.ref_name }}_amd64.deb
-            sudo apt-get install -f
-            ```
-
-            ### Linux (AppImage)
-            ```bash
-            chmod +x wichain_${{ github.ref_name }}_amd64.AppImage
-            ./wichain_${{ github.ref_name }}_amd64.AppImage
-            ```
-
-            ### macOS
-            1. Download the `.dmg` file
-            2. Open the DMG
-            3. Drag WiChain to Applications folder
-
-            ## 📝 What's New
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-
-            ## 🐛 Report Issues
-            Found a bug? [Open an issue](https://github.com/${{ github.repository }}/issues/new)
+            ## 💡 Notes
+            - This release was built using [Tauri 2.8.0](https://tauri.app).
+            - See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            - Report issues [here](https://github.com/${{ github.repository }}/issues/new).
 
             ---
-            Built with ❤️ using Tauri 2.8.0
+            ❤️ Built automatically on push
           draft: false
           prerelease: false
           generate_release_notes: true
