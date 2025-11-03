@@ -126,7 +126,7 @@ jobs:
           if [ -z "${BUNDLE:-}" ]; then
             echo "No bundle directory found on Unix runner."
             echo "No bundle created on this runner at $(date)" > "$DST/_NO_BUNDLE_README.txt"
-            echo "bundle_path=" >> $GITHUB_OUTPUT
+            echo "bundle_path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -134,15 +134,14 @@ jobs:
           rsync -a "$BUNDLE"/ "$DST"/ || cp -a "$BUNDLE"/. "$DST"/
           echo "Copied files to $DST:"
           find "$DST" -maxdepth 4 -type f -print || true
-          echo "bundle_path=$BUNDLE" >> $GITHUB_OUTPUT
+          echo "bundle_path=$BUNDLE" >> "$GITHUB_OUTPUT"
 
       - name: Collect build bundles (Windows)
         if: runner.os == 'Windows'
         id: collect_win
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-
+          $ErrorActionPreference = 'Continue'
           $workspace = $env:GITHUB_WORKSPACE
           $userPath = 'F:\Major_Project\wichain\artifacts'
           $dst = Join-Path $workspace "artifacts\${{ matrix.platform.artifact_name }}-${{ github.ref_name }}"
@@ -150,40 +149,38 @@ jobs:
 
           # find bundle location
           $bundleCandidate = Join-Path $workspace "wichain-backend\src-tauri\target\release\bundle"
-          if (Test-Path $bundleCandidate) {
-            $bundle = $bundleCandidate
-          } else {
+          if (Test-Path $bundleCandidate) { $bundle = $bundleCandidate }
+          else {
             $found = Get-ChildItem -Path $workspace -Directory -Recurse -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -like "*\target\release\bundle" } |
               Select-Object -First 1
             if ($found) { $bundle = $found.FullName } else { $bundle = $null }
           }
 
-          if ($null -ne $bundle) {
-            # If user path exists on this runner, copy there too
+          if ($bundle) {
             if (Test-Path $userPath) {
               Write-Host "Copying bundle to user-provided path: $userPath"
               New-Item -ItemType Directory -Force -Path $userPath | Out-Null
               robocopy $bundle $userPath /E /NFL /NDL /NJH /NJS
-              $rc = $LASTEXITCODE
-              if ($rc -ge 8) { throw "robocopy to userPath failed with code $rc" } else { Write-Host "robocopy to userPath exit code $rc (ok)"; }
-            } else {
-              Write-Host "User-provided path $userPath not present on runner; skipping copy to it."
+              if ($LASTEXITCODE -gt 7) {
+                Write-Error "Robocopy to user path failed with exit code $LASTEXITCODE"
+                exit 1
+              }
             }
-
             Write-Host "Copying bundle to workspace dst: $dst"
             robocopy $bundle $dst /E /NFL /NDL /NJH /NJS
-            $rc = $LASTEXITCODE
-            if ($rc -ge 8) { throw "robocopy to workspace dst failed with code $rc" } else { Write-Host "robocopy to dst exit code $rc (ok)"; }
-
+            if ($LASTEXITCODE -gt 7) {
+              Write-Error "Robocopy to workspace failed with exit code $LASTEXITCODE"
+              exit 1
+            }
+            Write-Host "Copied bundle files successfully."
           } else {
             Write-Host "No bundle found; creating placeholder at $dst"
             New-Item -ItemType Directory -Force -Path (Join-Path $dst "_NO_BUNDLE") | Out-Null
             "No bundle created on this runner at $(Get-Date)" | Out-File -FilePath (Join-Path $dst "_NO_BUNDLE\README.txt") -Encoding UTF8
           }
 
-          if ($null -ne $bundle) { Add-Content -Path $env:GITHUB_OUTPUT -Value "bundle_path=$bundle" }
-          else { Add-Content -Path $env:GITHUB_OUTPUT -Value "bundle_path=" }
+          if ($bundle) { echo "bundle_path=$bundle" >> $env:GITHUB_OUTPUT } else { echo "bundle_path=" >> $env:GITHUB_OUTPUT }
 
       - name: Debug list canonical artifacts folder
         shell: bash
@@ -203,6 +200,9 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
