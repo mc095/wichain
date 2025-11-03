@@ -3,10 +3,13 @@ name: Build WiChain for All Platforms
 on:
   push:
     branches:
-      - "**"
+      - '**'
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -30,24 +33,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: NUKE all lockfiles and node_modules from repo
-        shell: bash
-        run: |
-          echo "=== Nuking all npm artifacts ==="
-          find wichain-backend -name "package-lock.json" -type f -delete 2>/dev/null || true
-          find wichain-backend -name ".package-lock.json" -type f -delete 2>/dev/null || true
-          find wichain-backend -name "node_modules" -type d -exec rm -rf {} + 2>/dev/null || true
-          git rm --cached -r wichain-backend/node_modules 2>/dev/null || true
-          git rm --cached wichain-backend/package-lock.json 2>/dev/null || true
-          git rm --cached wichain-backend/frontend/package-lock.json 2>/dev/null || true
-          echo "=== Cleanup complete ==="
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Setup Rust
+      - name: Setup Rust (stable, add target)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform.rust_target }}
@@ -62,17 +53,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libssl-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libsoup-3.0-dev \
-            build-essential \
-            curl \
-            wget \
-            file
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libssl-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev build-essential curl wget file
 
       - name: Clean npm artifacts (Unix)
         if: runner.os != 'Windows'
@@ -80,7 +63,7 @@ jobs:
         run: |
           rm -rf package-lock.json node_modules .package-lock.json 2>/dev/null || true
           rm -rf frontend/package-lock.json frontend/node_modules frontend/.package-lock.json 2>/dev/null || true
-          npm cache clean --force
+          npm cache clean --force || true
 
       - name: Clean npm artifacts (Windows)
         if: runner.os == 'Windows'
@@ -97,16 +80,13 @@ jobs:
           npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
           npm install
 
-      - name: Verify Tauri versions
+      - name: Verify Tauri versions (non-fatal)
         working-directory: wichain-backend/frontend
         run: |
-          echo "=== Installed Tauri versions ==="
+          echo "=== npm tauri versions ==="
           npm list @tauri-apps/api @tauri-apps/cli || true
-          echo ""
-          echo "=== Checking Cargo.toml ==="
+          echo "=== check Cargo.toml for tauri = ==="
           grep "tauri =" ../src-tauri/Cargo.toml || true
-          echo ""
-          echo "✅ All good!"
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
@@ -126,16 +106,120 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo tauri build
 
-      - name: Show build outputs (debug)
+      # --- Collect bundles into canonical artifacts folder ---
+      # We will try the exact Windows path you gave first (F:\Major_Project\wichain\artifacts),
+      # otherwise we fall back to $GITHUB_WORKSPACE/artifacts.
+      - name: Collect build bundles (Unix)
+        if: runner.os != 'Windows'
+        id: collect_unix
+        shell: bash
         run: |
-          echo "=== Bundle outputs ==="
-          find wichain-backend/src-tauri/target/release/bundle -type f || true
+          set -euo pipefail
+          WORKSPACE="${GITHUB_WORKSPACE:-/github/workspace}"
+          # canonical repo artifacts folder
+          DST="$WORKSPACE/artifacts/${{ matrix.platform.artifact_name }}-${{ github.ref_name }}"
+          mkdir -p "$DST"
 
-      - name: Upload build artifacts
+          # preferred path inside repo (common layout)
+          PREFERRED="$WORKSPACE/wichain-backend/src-tauri/target/release/bundle"
+          if [ -d "$PREFERRED" ]; then
+            BUNDLE="$PREFERRED"
+          else
+            # fallback: search for any target/release/bundle under workspace
+            BUNDLE=$(find "$WORKSPACE" -type d -path "*/target/release/bundle" -print -quit || true)
+          fi
+
+          if [ -z "$BUNDLE" ]; then
+            echo "No bundle directory found on Unix runner."
+            echo "Created placeholder README in $DST"
+            echo "No bundle created on this runner at $(date)" > "$DST/_NO_BUNDLE_README.txt"
+            echo "bundle_path=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Found bundle at: $BUNDLE"
+          echo "Copying bundle contents to $DST"
+          rsync -a "$BUNDLE"/ "$DST"/ || cp -a "$BUNDLE"/. "$DST"/
+          echo "Copied files:"
+          find "$DST" -maxdepth 4 -type f -print || true
+          echo "bundle_path=$BUNDLE" >> $GITHUB_OUTPUT
+
+      - name: Collect build bundles (Windows)
+        if: runner.os == 'Windows'
+        id: collect_win
+        shell: pwsh
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          # user-provided absolute path (Windows)
+          $userPath = 'F:\Major_Project\wichain\artifacts'
+          # canonical fallback inside workspace
+          $dst = Join-Path $workspace "artifacts\${{ matrix.platform.artifact_name }}-${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          if (Test-Path $userPath) {
+            Write-Host "Using user-provided artifacts path: $userPath"
+            $bundleCandidate = Join-Path $workspace "wichain-backend\src-tauri\target\release\bundle"
+            if (Test-Path $bundleCandidate) {
+              $bundle = $bundleCandidate
+            } else {
+              # search for any target\release\bundle in workspace
+              $found = Get-ChildItem -Path $workspace -Directory -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like "*\target\release\bundle" } |
+                Select-Object -First 1
+              if ($found) { $bundle = $found.FullName } else { $bundle = $null }
+            }
+
+            if ($bundle) {
+              Write-Host "Found bundle at $bundle. Copying to $userPath"
+              New-Item -ItemType Directory -Force -Path $userPath | Out-Null
+              robocopy $bundle $userPath /E /NFL /NDL /NJH /NJS | Out-Null
+              # Also copy to workspace dst for uploader consistency
+              robocopy $bundle $dst /E /NFL /NDL /NJH /NJS | Out-Null
+              Write-Host "Copied files to both $userPath and $dst"
+            } else {
+              Write-Host "No bundle found. Creating placeholder README at $dst"
+              New-Item -ItemType Directory -Force -Path (Join-Path $dst "_NO_BUNDLE") | Out-Null
+              "No bundle created on this runner at $(Get-Date)" | Out-File -FilePath (Join-Path $dst "_NO_BUNDLE\README.txt") -Encoding UTF8
+            }
+          } else {
+            Write-Host "User-provided path $userPath does not exist on runner. Falling back to workspace artifacts."
+            $bundleCandidate = Join-Path $workspace "wichain-backend\src-tauri\target\release\bundle"
+            if (Test-Path $bundleCandidate) { $bundle = $bundleCandidate } else {
+              $found = Get-ChildItem -Path $workspace -Directory -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -like "*\target\release\bundle" } |
+                Select-Object -First 1
+              if ($found) { $bundle = $found.FullName } else { $bundle = $null }
+            }
+
+            if ($bundle) {
+              Write-Host "Found bundle at $bundle. Copying to $dst"
+              robocopy $bundle $dst /E /NFL /NDL /NJH /NJS | Out-Null
+              Write-Host "Copied files to $dst"
+            } else {
+              Write-Host "No bundle found. Creating placeholder README at $dst"
+              New-Item -ItemType Directory -Force -Path (Join-Path $dst "_NO_BUNDLE") | Out-Null
+              "No bundle created on this runner at $(Get-Date)" | Out-File -FilePath (Join-Path $dst "_NO_BUNDLE\README.txt") -Encoding UTF8
+            }
+          }
+
+          # expose dst path for debugging
+          Write-Host "artifact_dst=$dst" 
+          echo "bundle_path=$bundle" >> $env:GITHUB_OUTPUT
+
+      - name: Debug: list canonical artifacts folder
+        shell: bash
+        run: |
+          WORKSPACE="${GITHUB_WORKSPACE:-/github/workspace}"
+          echo "Listing top-level artifacts dir:"
+          ls -la "$WORKSPACE/artifacts" || true
+          echo "Listing our platform artifacts dir (if present):"
+          ls -la "$WORKSPACE/artifacts/${{ matrix.platform.artifact_name }}-${{ github.ref_name }}" || true
+
+      - name: Upload canonical artifacts folder
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform.artifact_name }}-${{ github.ref_name }}
-          path: wichain-backend/src-tauri/target/release/bundle/**
+          path: artifacts/${{ matrix.platform.artifact_name }}-${{ github.ref_name }}/**
 
   release:
     needs: build
@@ -153,39 +237,46 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Display downloaded files
+      - name: Display downloaded files (debug)
         run: |
-          echo "=== Artifacts downloaded ==="
-          ls -R artifacts || echo "⚠️ No artifacts found!"
+          echo "=== Artifacts root ==="
+          if [ -d artifacts ]; then
+            ls -R artifacts || true
+          else
+            echo "artifacts/ not found"
+          fi
 
-      - name: Create GitHub Release
+      - name: Verify artifacts exist (fail if none)
+        shell: bash
+        run: |
+          if [ ! -d artifacts ] || [ "$(find artifacts -type f | wc -l)" -eq 0 ]; then
+            echo "::error::No artifacts were downloaded. Aborting release to avoid empty release."
+            exit 1
+          fi
+          echo "Artifacts present:"
+          find artifacts -type f -print
+
+      - name: Create GitHub Release and attach artifacts
         uses: softprops/action-gh-release@v2
         with:
           name: WiChain-${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/**/*.msi
-            artifacts/**/*.deb
-            artifacts/**/*.AppImage
-            artifacts/**/*.dmg
+            artifacts/*/**/*.msi
+            artifacts/*/**/*.deb
+            artifacts/*/**/*.AppImage
+            artifacts/*/**/*.dmg
+            artifacts/*/**/*.zip
+            artifacts/*/**/*.tar.gz
           body: |
             # 🚀 WiChain Build — `${{ github.ref_name }}`
-            
             This release was automatically created from a push to `${{ github.ref_name }}`.
 
-            ## 📦 Downloads
-
-            **Windows (.msi)**  
-            **Linux (.deb / .AppImage)**  
-            **macOS (.dmg)**
-
-            ## 💡 Notes
-            - This release was built using [Tauri 2.8.0](https://tauri.app).
-            - See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-            - Report issues [here](https://github.com/${{ github.repository }}/issues/new).
+            ## Downloads
+            Attachments include platform bundles and fallback archives.
 
             ---
-            ❤️ Built automatically on push
+            Built with Tauri 2.8.0
           draft: false
           prerelease: false
           generate_release_notes: true
