@@ -2,8 +2,10 @@ name: Build WiChain for All Platforms
 
 on:
   push:
+    branches:
+      - "**"
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -15,15 +17,12 @@ jobs:
           - os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             artifact_name: wichain-windows
-            artifact_ext: .msi
           - os: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
             artifact_name: wichain-linux
-            artifact_ext: .deb
           - os: macos-latest
             rust_target: x86_64-apple-darwin
             artifact_name: wichain-macos
-            artifact_ext: .dmg
 
     runs-on: ${{ matrix.platform.os }}
 
@@ -75,15 +74,15 @@ jobs:
             wget \
             file
 
-      - name: FORCE clean all npm files (Unix)
+      - name: Clean npm artifacts (Unix)
         if: runner.os != 'Windows'
         working-directory: wichain-backend
         run: |
           rm -rf package-lock.json node_modules .package-lock.json 2>/dev/null || true
           rm -rf frontend/package-lock.json frontend/node_modules frontend/.package-lock.json 2>/dev/null || true
           npm cache clean --force
-          
-      - name: FORCE clean all npm files (Windows)
+
+      - name: Clean npm artifacts (Windows)
         if: runner.os == 'Windows'
         working-directory: wichain-backend
         shell: pwsh
@@ -91,24 +90,23 @@ jobs:
           Remove-Item -Path "package-lock.json","node_modules",".package-lock.json" -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -Path "frontend/package-lock.json","frontend/node_modules","frontend/.package-lock.json" -Recurse -Force -ErrorAction SilentlyContinue
           npm cache clean --force
-          
+
       - name: Install EXACT Tauri versions (2.8.0)
         working-directory: wichain-backend/frontend
         run: |
           npm install @tauri-apps/api@2.8.0 @tauri-apps/cli@2.8.0 --save-exact --force
           npm install
 
-      - name: Verify Tauri versions (SUCCESS!)
+      - name: Verify Tauri versions
         working-directory: wichain-backend/frontend
-        shell: bash
         run: |
           echo "=== Installed Tauri versions ==="
-          npm list @tauri-apps/api @tauri-apps/cli
+          npm list @tauri-apps/api @tauri-apps/cli || true
           echo ""
-          echo "=== Checking Rust Cargo.toml ==="
-          cat ../src-tauri/Cargo.toml | grep "tauri ="
+          echo "=== Checking Cargo.toml ==="
+          grep "tauri =" ../src-tauri/Cargo.toml || true
           echo ""
-          echo "✅ ALL VERSIONS CORRECT! Proceeding with build..."
+          echo "✅ All good!"
 
       - name: Build frontend
         working-directory: wichain-backend/frontend
@@ -118,7 +116,7 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo update
 
-      - name: Install Tauri CLI (cached)
+      - name: Install Tauri CLI
         uses: baptiste0928/cargo-install@v3
         with:
           crate: tauri-cli
@@ -128,36 +126,23 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo tauri build
 
-      - name: Upload artifacts (Windows)
-        if: matrix.platform.os == 'windows-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform.artifact_name }}
-          path: wichain-backend/src-tauri/target/release/bundle/msi/*.msi
+      - name: Show build outputs (debug)
+        run: |
+          echo "=== Bundle outputs ==="
+          find wichain-backend/src-tauri/target/release/bundle -type f || true
 
-      - name: Upload artifacts (Linux)
-        if: matrix.platform.os == 'ubuntu-22.04'
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.artifact_name }}
-          path: |
-            wichain-backend/src-tauri/target/release/bundle/deb/*.deb
-            wichain-backend/src-tauri/target/release/bundle/appimage/*.AppImage
-
-      - name: Upload artifacts (macOS)
-        if: matrix.platform.os == 'macos-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform.artifact_name }}
-          path: wichain-backend/src-tauri/target/release/bundle/dmg/*.dmg
+          name: ${{ matrix.platform.artifact_name }}-${{ github.ref_name }}
+          path: wichain-backend/src-tauri/target/release/bundle/**
 
   release:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -168,69 +153,39 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Display artifact structure
+      - name: Display downloaded files
         run: |
-          echo "Downloaded artifacts:"
-          ls -R artifacts/
+          echo "=== Artifacts downloaded ==="
+          ls -R artifacts || echo "⚠️ No artifacts found!"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: WiChain-${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/wichain-windows/**/*.msi
-            artifacts/wichain-linux/**/*.deb
-            artifacts/wichain-linux/**/*.AppImage
-            artifacts/wichain-macos/**/*.dmg
+            artifacts/**/*.msi
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.dmg
           body: |
-            # 🎉 WiChain ${{ github.ref_name }}
+            # 🚀 WiChain Build — `${{ github.ref_name }}`
             
+            This release was automatically created from a push to `${{ github.ref_name }}`.
+
             ## 📦 Downloads
-            
-            ### Windows
-            - **wichain_${{ github.ref_name }}_x64.msi** - Windows 10/11 installer (64-bit)
-            
-            ### Linux
-            - **wichain_${{ github.ref_name }}_amd64.deb** - Debian/Ubuntu package
-            - **wichain_${{ github.ref_name }}_amd64.AppImage** - Universal Linux binary (no installation required)
-            
-            ### macOS
-            - **wichain_${{ github.ref_name }}_x64.dmg** - macOS Intel installer
-            
-            ## 🚀 Installation
-            
-            ### Windows
-            1. Download the `.msi` file
-            2. Double-click to install
-            3. Follow the installation wizard
-            
-            ### Linux (DEB)
-            ```bash
-            sudo dpkg -i wichain_${{ github.ref_name }}_amd64.deb
-            sudo apt-get install -f  # Fix dependencies if needed
-            ```
-            
-            ### Linux (AppImage)
-            ```bash
-            chmod +x wichain_${{ github.ref_name }}_amd64.AppImage
-            ./wichain_${{ github.ref_name }}_amd64.AppImage
-            ```
-            
-            ### macOS
-            1. Download the `.dmg` file
-            2. Open the DMG
-            3. Drag WiChain to Applications folder
-            
-            ## 📝 What's New
-            
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
-            
-            ## 🐛 Report Issues
-            
-            Found a bug? [Open an issue](https://github.com/${{ github.repository }}/issues/new)
-            
+
+            **Windows (.msi)**  
+            **Linux (.deb / .AppImage)**  
+            **macOS (.dmg)**
+
+            ## 💡 Notes
+            - This release was built using [Tauri 2.8.0](https://tauri.app).
+            - See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            - Report issues [here](https://github.com/${{ github.repository }}/issues/new).
+
             ---
-            
-            Built with ❤️ using Tauri 2.8.0
+            ❤️ Built automatically on push
           draft: false
           prerelease: false
           generate_release_notes: true
