@@ -106,7 +106,6 @@ jobs:
         working-directory: wichain-backend/src-tauri
         run: cargo tauri build
 
-      # Collect bundles into canonical artifacts folder (Unix)
       - name: Collect build bundles (Unix)
         if: runner.os != 'Windows'
         id: collect_unix
@@ -137,7 +136,6 @@ jobs:
           find "$DST" -maxdepth 4 -type f -print || true
           echo "bundle_path=$BUNDLE" >> "$GITHUB_OUTPUT"
 
-      # Collect bundles into canonical artifacts folder (Windows)
       - name: Collect build bundles (Windows)
         if: runner.os == 'Windows'
         id: collect_win
@@ -175,7 +173,7 @@ jobs:
 
           if ($bundle) { echo "bundle_path=$bundle" >> $env:GITHUB_OUTPUT } else { echo "bundle_path=" >> $env:GITHUB_OUTPUT }
 
-      - name: "Debug - list canonical artifacts folder"
+      - name: Debug list canonical artifacts folder
         shell: bash
         run: |
           WORKSPACE="${GITHUB_WORKSPACE:-/github/workspace}"
