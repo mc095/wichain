@@ -162,17 +162,21 @@ jobs:
               Write-Host "Copying bundle to user-provided path: $userPath"
               New-Item -ItemType Directory -Force -Path $userPath | Out-Null
               robocopy $bundle $userPath /E /NFL /NDL /NJH /NJS
-              if ($LASTEXITCODE -gt 7) {
-                Write-Error "Robocopy to user path failed with exit code $LASTEXITCODE"
+              $exitCode = $LASTEXITCODE
+              if ($exitCode -gt 7) {
+                Write-Error "Robocopy to user path failed with exit code $exitCode"
                 exit 1
               }
+              Write-Host "Robocopy to user path completed with code $exitCode"
             }
             Write-Host "Copying bundle to workspace dst: $dst"
             robocopy $bundle $dst /E /NFL /NDL /NJH /NJS
-            if ($LASTEXITCODE -gt 7) {
-              Write-Error "Robocopy to workspace failed with exit code $LASTEXITCODE"
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -gt 7) {
+              Write-Error "Robocopy to workspace failed with exit code $exitCode"
               exit 1
             }
+            Write-Host "Robocopy completed with code $exitCode (success)"
             Write-Host "Copied bundle files successfully."
           } else {
             Write-Host "No bundle found; creating placeholder at $dst"
@@ -181,6 +185,9 @@ jobs:
           }
 
           if ($bundle) { echo "bundle_path=$bundle" >> $env:GITHUB_OUTPUT } else { echo "bundle_path=" >> $env:GITHUB_OUTPUT }
+          
+          # Force exit code 0 for GitHub Actions
+          exit 0
 
       - name: Debug list canonical artifacts folder
         shell: bash
