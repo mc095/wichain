@@ -65,7 +65,7 @@ The project is structured into several Rust crates for clear separation of conce
 
 ### Download Pre-built Installers
 
-**Latest Release:** [Download from GitHub Releases](https://github.com/YOUR_USERNAME/wichain/releases/latest)
+**Latest Release:** [Download from GitHub Releases](https://github.com/mc095/wichain/releases/latest)
 
 #### Windows (10/11)
 1. Download `wichain_x64.msi`
@@ -175,7 +175,7 @@ chmod +x wichain_amd64.AppImage
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/wichain.git
+git clone https://github.com/mc095/wichain.git
 cd wichain
 
 # Build Rust workspace

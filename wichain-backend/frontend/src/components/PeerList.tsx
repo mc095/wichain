@@ -68,6 +68,27 @@ export function PeerList({
     return latestMessage.text;
   };
 
+  const getLastMessageForGroup = (groupId: string) => {
+    // Get the latest message for this group
+    const groupMessages = messages.filter(msg => msg.group_id === groupId);
+    
+    if (groupMessages.length === 0) {
+      return "Start the conversation!";
+    }
+    
+    // Sort by timestamp and get the latest
+    const latestMessage = groupMessages.sort((a, b) => b.ts_ms - a.ts_ms)[0];
+    
+    // Extract text from image messages
+    const imageMatch = latestMessage.text.match(/\[IMAGE_DATA:(.+?)\]/);
+    if (imageMatch) {
+      const textWithoutImage = latestMessage.text.replace(/\[IMAGE_DATA:.+?\]/, '').trim();
+      return textWithoutImage || "📷 Image";
+    }
+    
+    return latestMessage.text;
+  };
+
   const getLastMessageTime = (peerId: string) => {
     const peerMessages = messages.filter(msg => 
       (msg.from === myPub && msg.to === peerId) || 
@@ -82,12 +103,36 @@ export function PeerList({
     return latestMessage.ts_ms;
   };
 
-  const getConnectionStatus = (_peer: PeerInfo) => {
-    // For now, assume all peers are online
-    return { color: 'bg-green-500', text: '' };
+  const getLastMessageTimeForGroup = (groupId: string) => {
+    const groupMessages = messages.filter(msg => msg.group_id === groupId);
+    
+    if (groupMessages.length === 0) {
+      return null;
+    }
+    
+    const latestMessage = groupMessages.sort((a, b) => b.ts_ms - a.ts_ms)[0];
+    return latestMessage.ts_ms;
   };
 
-
+  const getConnectionStatus = (peer: PeerInfo) => {
+    // Check if peer is online based on last_seen_ms timestamp
+    const now = Date.now();
+    const lastSeen = peer.last_seen_ms || 0;
+    const timeDiff = now - lastSeen;
+    
+    // Consider offline if not seen for more than 5 minutes
+    if (timeDiff > 300000 || lastSeen === 0) {
+      return { color: 'bg-red-500', text: 'offline' };
+    }
+    
+    // Consider away if not seen for more than 1 minute
+    if (timeDiff > 60000) {
+      return { color: 'bg-yellow-500', text: 'away' };
+    }
+    
+    // Online if seen recently
+    return { color: 'bg-green-500', text: 'online' };
+  };
 
   const handleSaveGroup = async (groupId: string) => {
     try {
@@ -313,12 +358,15 @@ export function PeerList({
                         )}
                         
                         <p className="text-slate-400 text-xs truncate mt-1">
-                          {getLastMessage(group.id)}
+                          {getLastMessageForGroup(group.id)}
                         </p>
                         
                         <div className="flex items-center justify-between mt-1">
                           <span className="text-slate-500 text-xs">
-                            {formatTime(Date.now() - Math.random() * 86400000)}
+                            {(() => {
+                              const lastMsgTime = getLastMessageTimeForGroup(group.id);
+                              return lastMsgTime ? formatTime(lastMsgTime) : 'Start the conversation!';
+                            })()}
                           </span>
                           {Math.random() > 0.8 && (
                             <div className="flex items-center space-x-1">
